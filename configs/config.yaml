@@ -1,0 +1,57 @@
+# Shared project settings for BBBC042 astrocyte center detection.
+# TODO [Team]: confirm values using actual data, validation results and hardware.
+
+project:
+  name: Astrocyte_Detection
+  seed: 42
+
+data:
+  root: datasets/BBBC042
+  images_dir: datasets/BBBC042/images
+  annotations_dir: datasets/BBBC042/positions
+  # TODO [Zhang]: verify image filename <-> annotation filename mapping.
+  # TODO [Zhang]: confirm whether coordinates are (x,y) or (row,column), and index origin.
+  input_channels: 1  # TODO [Zhu]: confirm GFAP/channel choice and normalization.
+  image_size: [256, 256]  # TODO [Zhang]: decide resize vs crop; transform points consistently.
+  train_fraction: 0.70
+  val_fraction: 0.15
+  test_fraction: 0.15
+  # TODO [Team]: split by source/slide where relevant to avoid leakage.
+
+heatmap:
+  sigma_pixels: 3.0  # TODO [Zhang]: tune according to cell size and image scale.
+  # TODO [Zhang]: implement Gaussian heatmap from verified point annotations.
+
+model:
+  architecture: unet
+  encoder: resnet18
+  encoder_weights: null
+  output_channels: 1
+  # TODO [Liu]: ensure model output is logits (no final sigmoid during training).
+
+training:
+  batch_size: 8  # TODO [Liu]: adjust to available GPU memory.
+  epochs: 50  # TODO [Liu]: decide training budget and early stopping.
+  learning_rate: 0.0001
+  optimizer: adam
+  loss: bce_with_logits  # TODO [Liu]: evaluate suitability for sparse heatmaps.
+  num_workers: 0  # TODO [Liu]: tune on training machine.
+  checkpoint_dir: checkpoints
+
+inference:
+  threshold: 0.5  # TODO [Liu]: tune on validation set, not test set.
+  min_distance_pixels: 5  # TODO [Zhang]: tune based on center spacing.
+  # TODO [Zhang]: map predicted centers back to original image coordinates.
+
+baseline:
+  model: cpsam  # TODO [Zhang]: verify Cellpose version/API and model availability.
+  # TODO [Team]: match input preprocessing and evaluation split fairly.
+
+evaluation:
+  match_radius_pixels: 8  # TODO [Liu, Zhu]: justify using annotation uncertainty and pixel scale.
+  # TODO [Liu]: one-to-one matching, precision/recall/F1 and count MAE.
+
+ffpe:
+  enabled: false
+  # TODO [Zhu]: confirm channels, image scale, annotations and QC criteria.
+  # TODO [Zhang]: add tiled QPTIFF inference and global-coordinate deduplication.

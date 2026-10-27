@@ -94,3 +94,52 @@ def counting_metrics(pred_counts, gt_counts) -> Dict[str, float]:
     g = np.asarray(gt_counts)
     if p.ndim != 1 or g.ndim != 1 or not len(p) or len(p) != len(g):
         raise ValueError("Count lists must be nonempty, one-dimensional, and equal length")
+    # IMPLEMENTED [Liu]: Check valid integer cell counts.
+    for counts, name in ((p, "pred_counts"), (g, "gt_counts")):
+        try:
+            values = counts.astype(np.float64)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must contain numeric counts") from exc
+
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"{name} contains invalid values")
+
+        if np.any(values < 0) or np.any(values != np.floor(values)):
+            raise ValueError(f"{name} must contain nonnegative integer counts")
+
+    # IMPLEMENTED [Liu]: Calculate counting errors.
+    errors = p.astype(np.float64) - g.astype(np.float64)
+
+    mae = np.mean(np.abs(errors))
+    rmse = np.sqrt(np.mean(errors ** 2))
+
+    return {
+        "mae": float(mae),
+        "rmse": float(rmse)
+    }
+
+def export_report(metrics: dict, output_path: str):
+    """Export evaluation metrics to a JSON or CSV file."""
+
+    if not isinstance(metrics, dict):
+        raise TypeError("metrics must be a dictionary")
+
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if path.suffix.lower() == ".json":
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(metrics, f, indent=4, ensure_ascii=False)
+
+    elif path.suffix.lower() == ".csv":
+        with path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["metric", "value"])
+
+            for key, value in metrics.items():
+                writer.writerow([key, value])
+
+    else:
+        raise ValueError("Output must be .json or .csv")
+
+    return str(path)

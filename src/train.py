@@ -1,143 +1,462 @@
-"""Image loading and preprocessing for small microscopy images and QPTIFF tiles."""
+"""Training pipeline for AstrocyteUNet.
 
+Owner: Liu (model/training) | Input: configs/config.yaml + BBBC042 dataloaders.
+
+REDESIGN contract consumed here (see model.py / dataset.py):
+- model(images) -> {"semantic_logits": [B,3,H,W], "center_logits": [B,1,H,W]}
+  (raw logits; softmax/sigmoid are applied only at inference).
+- batch targets: semantic_mask [B,H,W] int64 (0 bg / 1 soma / 2 process),
+  center_heatmap [B,1,H,W] float32 in [0,1], valid_mask [B,H,W] bool
+  (False = unlabeled/ambiguous pixel, excluded from the loss).
+
+The real-data entry point (train()) expects dataset.build_dataloaders();
+until that lands, use `python src/train.py --self-test` to verify the whole
+training loop on synthetic data end to end.
+"""
+
+import argparse
+import json
+import random
+import tempfile
+import time
 from pathlib import Path
-from typing import Iterator, Tuple
 
-import cv2
 import numpy as np
-import tifffile
 import torch
+import yaml
+from torch import nn
+from torch.utils.data import DataLoader, Dataset
+
+# FIX: Use an explicit package/script import branch (same pattern as baseline_cellpose).
+if __package__:
+    from .model import create_model
+else:
+    from model import create_model
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "config.yaml"
+NUM_SEMANTIC_CLASSES = 3  # 0 background / 1 soma / 2 visible process
 
 
-def load_image(path: str | Path) -> np.ndarray:
-    """Read a small PNG/TIF/TIFF. QPTIFF must use iter_qptiff_tiles instead."""
-    # FIX: Reject missing/empty paths before Path conversion; avoid ambiguous directory errors.
-    if path is None or not str(path).strip():
-        raise ValueError("Image path must not be empty")
-    path = Path(path)
+# --------------------------------------------------------------------------- #
+# Configuration and setup
+# --------------------------------------------------------------------------- #
+
+def load_config(config_path: str | Path = DEFAULT_CONFIG_PATH) -> dict:
+    """Load and minimally validate the YAML training configuration."""
+    path = Path(config_path)
     if not path.is_file():
-        raise FileNotFoundError(f"Image file not found: {path}")
-    suffix = path.suffix.lower()
-    if suffix == ".qptiff":
-        raise ValueError("Use iter_qptiff_tiles() for QPTIFF; do not load the whole slide.")
-    if suffix == ".png":
-        image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-        if image is None:
-            raise OSError(f"Cannot read PNG: {path}")
-        if image.ndim == 3:
-            # FIX: Explicitly support only OpenCV BGR/BGRA channel layouts.
-            if image.shape[2] == 3:
-                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            elif image.shape[2] == 4:
-                image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
-            else:
-                raise ValueError(f"Unsupported PNG channel count: {image.shape[2]}")
-        return image
-    if suffix in {".tif", ".tiff"}:
-        return tifffile.imread(str(path))
-    raise ValueError(f"Unsupported image extension: {suffix}")
+        raise FileNotFoundError(f"Config file not found: {path}")
+    with path.open("r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    if not isinstance(config, dict):
+        raise ValueError(f"Config must be a mapping, got {type(config).__name__}")
+    for section in ("data", "model", "training"):
+        if section not in config or not isinstance(config[section], dict):
+            raise ValueError(f"Config is missing required section: {section!r}")
+    return config
 
 
-def prepare_image(image: np.ndarray, channel: int | None = None) -> torch.Tensor:
-    """Convert a 2D grayscale or HWC RGB image to float32 CHW tensor in [0,1].
+def set_seed(seed: int = 42) -> None:
+    """Seed Python, NumPy and torch for reproducible runs."""
+    if not isinstance(seed, (int, np.integer)) or seed < 0:
+        raise ValueError("seed must be a non-negative integer")
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        # FIX (review B7): make GPU runs reproducible too (no-op on CPU-only
+        # machines, which is this project's target).
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
-    channel selects a channel in HWC input; if omitted, RGB is converted to gray.
-    Fluorescence channels should be selected based on microscopy metadata.
-    REDESIGN: preserve fine visible processes; per-tile contrast normalization
-    can hide intensity differences relevant to later slide-quality assessment.
+
+def get_device(preference: str = "auto") -> torch.device:
+    """Resolve the compute device. This project targets CPU-only machines too."""
+    if preference == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(preference)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise ValueError("CUDA requested but not available on this machine")
+    return device
+
+
+def build_model(config: dict) -> nn.Module:
+    """Create AstrocyteUNet from config (architecture/encoder/input channels)."""
+    model_cfg = config["model"]
+    architecture = model_cfg.get("architecture", "unet")
+    if architecture != "unet":
+        raise ValueError(f"Unsupported architecture: {architecture!r}")
+    in_channels = int(config["data"].get("input_channels", 1))
+    if in_channels <= 0:
+        raise ValueError("data.input_channels must be positive")
+    # FIX (review B5): catch a stale output_channels config value instead of
+    # silently training against a mismatched output-head contract.
+    declared = model_cfg.get("output_channels")
+    expected = NUM_SEMANTIC_CLASSES + 1  # 3 semantic classes + 1 center channel
+    if declared is not None and int(declared) != expected:
+        raise ValueError(
+            f"model.output_channels={declared} but the REDESIGN model emits "
+            f"{expected} channels; update configs/config.yaml."
+        )
+    return create_model(in_channels=in_channels,
+                        encoder_name=model_cfg.get("encoder", "resnet18"))
+
+
+def build_optimizer(model: nn.Module, config: dict) -> torch.optim.Optimizer:
+    """Create the optimizer from config (currently Adam)."""
+    train_cfg = config["training"]
+    lr = float(train_cfg.get("learning_rate", 1e-4))
+    if not np.isfinite(lr) or lr <= 0:
+        raise ValueError("training.learning_rate must be finite and positive")
+    name = str(train_cfg.get("optimizer", "adam")).lower()
+    if name != "adam":
+        raise ValueError(f"Unsupported optimizer: {name!r}")
+    return torch.optim.Adam(model.parameters(), lr=lr)
+
+
+# --------------------------------------------------------------------------- #
+# Loss
+# --------------------------------------------------------------------------- #
+
+class CompositeLoss(nn.Module):
+    """Semantic cross-entropy + center BCE-with-logits, masked by valid_mask.
+
+    config.training.loss == "bce_with_logits" selects this composite loss:
+    the center head uses BCE-with-logits and the semantic head uses plain
+    cross-entropy over the 3 mutually exclusive classes. Pixels where
+    valid_mask is False (unlabeled/ambiguous) are excluded from both terms.
     """
-    # FIX: A missing image must not be interpreted as a zero-cell detection.
-    if image is None:
-        raise ValueError("Image must not be None")
-    image = np.asarray(image)
-    # FIX: Reject empty dimensions before percentile calculation.
-    if image.size == 0 or any(dim == 0 for dim in image.shape):
-        raise ValueError(f"Image is empty: shape={image.shape}")
-    if image.ndim == 3:
-        if image.shape[-1] not in (3, 4):
-            raise ValueError("Expected HWC RGB/RGBA image; inspect axes for multichannel TIFF.")
-        if channel is not None:
-            # FIX: Disallow negative/out-of-range channel indexing.
-            if not isinstance(channel, (int, np.integer)) or not 0 <= channel < image.shape[-1]:
-                raise ValueError(f"Invalid channel {channel!r} for {image.shape[-1]} channels")
-            image = image[..., channel]
-        else:
-            image = cv2.cvtColor(image[..., :3], cv2.COLOR_RGB2GRAY)
-    elif image.ndim != 2:
-        raise ValueError(f"Expected 2D or HWC image; got shape {image.shape}")
-    elif channel is not None:
-        # FIX: A channel selector on a grayscale image is a configuration error.
-        raise ValueError("channel must be None for a 2D grayscale image")
-    if not np.issubdtype(image.dtype, np.number):
-        raise TypeError(f"Unsupported dtype: {image.dtype}")
-    # FIX: Non-finite intensities would poison normalization and model predictions.
-    if not np.all(np.isfinite(image)):
-        raise ValueError("Image contains NaN or infinite intensities")
-    image = image.astype(np.float32)
-    if not np.all(np.isfinite(image)):
-        raise ValueError("Image intensities exceed float32 finite range")
-    low, high = np.percentile(image, [1, 99.8])
-    if high <= low:
-        scaled = np.zeros_like(image, dtype=np.float32)
+
+    def __init__(self, semantic_weight: float = 1.0, center_weight: float = 1.0):
+        super().__init__()
+        for name, w in (("semantic_weight", semantic_weight), ("center_weight", center_weight)):
+            if not np.isfinite(w) or w < 0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+        if semantic_weight == 0 and center_weight == 0:
+            raise ValueError("At least one loss weight must be positive")
+        self.semantic_weight = float(semantic_weight)
+        self.center_weight = float(center_weight)
+
+    def forward(self, outputs: dict, targets: dict) -> dict:
+        semantic_logits = outputs["semantic_logits"]
+        center_logits = outputs["center_logits"]
+        semantic_mask = targets["semantic_mask"].long()
+        center_heatmap = targets["center_heatmap"].float()
+        valid_mask = targets["valid_mask"].bool()
+
+        if semantic_logits.ndim != 4 or semantic_logits.shape[1] != NUM_SEMANTIC_CLASSES:
+            raise ValueError(f"semantic_logits must be [B,{NUM_SEMANTIC_CLASSES},H,W]")
+        if semantic_mask.shape != semantic_logits.shape[:1] + semantic_logits.shape[2:]:
+            raise ValueError("semantic_mask shape must match logits [B,H,W]")
+        if center_heatmap.shape != center_logits.shape:
+            raise ValueError("center_heatmap must match center_logits [B,1,H,W]")
+        if valid_mask.shape != semantic_mask.shape:
+            raise ValueError("valid_mask must match semantic_mask [B,H,W]")
+
+        n_valid = int(valid_mask.sum().item())
+        if n_valid == 0:
+            # FIX: a fully ignored batch must not produce NaN gradients.
+            zero = semantic_logits.sum() * 0.0
+            return {"loss": zero, "semantic_loss": zero, "center_loss": zero}
+
+        # Semantic head: per-pixel CE, averaged over valid pixels only.
+        ce = nn.functional.cross_entropy(semantic_logits, semantic_mask, reduction="none")
+        semantic_loss = (ce * valid_mask).sum() / n_valid
+
+        # Center head: per-pixel BCE-with-logits, averaged over valid pixels only.
+        bce = nn.functional.binary_cross_entropy_with_logits(
+            center_logits, center_heatmap, reduction="none"
+        )
+        center_loss = (bce.squeeze(1) * valid_mask).sum() / n_valid
+
+        loss = self.semantic_weight * semantic_loss + self.center_weight * center_loss
+        return {"loss": loss, "semantic_loss": semantic_loss, "center_loss": center_loss}
+
+
+def build_criterion(config: dict) -> CompositeLoss:
+    """Build the loss from config; only bce_with_logits is currently supported."""
+    name = str(config["training"].get("loss", "bce_with_logits")).lower()
+    if name != "bce_with_logits":
+        raise ValueError(f"Unsupported loss: {name!r}")
+    return CompositeLoss()
+
+
+# --------------------------------------------------------------------------- #
+# Epoch loops
+# --------------------------------------------------------------------------- #
+
+def _split_batch(batch):
+    """Accept (image, targets) or (image, targets, metadata) batches."""
+    if not isinstance(batch, (tuple, list)) or len(batch) not in (2, 3):
+        raise ValueError("Batches must be (image, targets[, metadata])")
+    images, targets = batch[0], batch[1]
+    if not isinstance(targets, dict):
+        raise ValueError("targets must be a dict of tensors")
+    for key in ("semantic_mask", "center_heatmap", "valid_mask"):
+        if key not in targets:
+            raise ValueError(f"targets is missing required key: {key!r}")
+    return images, targets
+
+
+def _to_device(images, targets, device):
+    return images.to(device), {k: v.to(device) for k, v in targets.items()}
+
+
+def run_epoch(model, loader, criterion, device, optimizer=None) -> dict:
+    """Run one training (optimizer given) or evaluation (optimizer=None) epoch."""
+    training = optimizer is not None
+    model.train(training)
+    totals = {"loss": 0.0, "semantic_loss": 0.0, "center_loss": 0.0}
+    n_samples = 0
+    for batch in loader:
+        images, targets = _split_batch(batch)
+        images, targets = _to_device(images, targets, device)
+        batch_size = int(images.shape[0])
+        with torch.set_grad_enabled(training):
+            outputs = model(images)
+            losses = criterion(outputs, targets)
+            if training:
+                optimizer.zero_grad(set_to_none=True)
+                losses["loss"].backward()
+                optimizer.step()
+        # FIX (review B6): weight batch means by batch size so a short final
+        # batch is not over-represented in the epoch average.
+        for key in totals:
+            totals[key] += float(losses[key].detach().cpu()) * batch_size
+        n_samples += batch_size
+    if n_samples == 0:
+        raise ValueError("DataLoader produced no batches")
+    return {key: value / n_samples for key, value in totals.items()}
+
+
+# --------------------------------------------------------------------------- #
+# Checkpoints and history
+# --------------------------------------------------------------------------- #
+
+def save_checkpoint(model, optimizer, epoch: int, metrics: dict, config: dict,
+                    path: str | Path) -> str:
+    """Save a checkpoint with the schema predict.load_trained_model() expects."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "epoch": int(epoch),
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict() if optimizer else None,
+            "metrics": {k: float(v) for k, v in metrics.items()},
+            "config": config,
+            # REDESIGN: record the output-head schema so legacy single-heatmap
+            # weights can be rejected instead of silently mis-loaded.
+            "output_heads": {"semantic_classes": NUM_SEMANTIC_CLASSES, "center_channels": 1},
+        },
+        str(path),
+    )
+    return str(path)
+
+
+def train(config: dict, device: torch.device, progress=print) -> dict:
+    """Full training run: dataloaders -> epochs -> checkpoints + history.json.
+
+    IMPLEMENTED [Liu]: training budget + early stopping (patience) driven by
+    validation loss; best and last checkpoints are both kept.
+    """
+    # FIX (review B1): same package/script import branch as the model import,
+    # so `python -m src.train` works as well as `python src/train.py`.
+    # TODO [Zhang]: dataset.py is still a stub.
+    if __package__:
+        from .dataset import build_dataloaders
     else:
-        scaled = np.clip((image - low) / (high - low), 0, 1)
-    return torch.from_numpy(np.ascontiguousarray(scaled[None, ...]))
+        from dataset import build_dataloaders
+
+    train_cfg = config["training"]
+    epochs = int(train_cfg.get("epochs", 50))
+    patience = int(train_cfg.get("early_stopping_patience", 10))
+    checkpoint_dir = Path(train_cfg.get("checkpoint_dir", "checkpoints"))
+    if not checkpoint_dir.is_absolute():
+        checkpoint_dir = PROJECT_ROOT / checkpoint_dir
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    history_path = checkpoint_dir / "history.json"
+
+    model = build_model(config).to(device)
+    optimizer = build_optimizer(model, config)
+    criterion = build_criterion(config)
+    train_loader, val_loader = build_dataloaders(config)
+
+    history = []
+    best_val = float("inf")
+    epochs_without_improvement = 0
+    for epoch in range(1, epochs + 1):
+        started = time.time()
+        train_metrics = run_epoch(model, train_loader, criterion, device, optimizer)
+        val_metrics = run_epoch(model, val_loader, criterion, device)
+        record = {"epoch": epoch, "seconds": round(time.time() - started, 3)}
+        record.update({f"train_{k}": v for k, v in train_metrics.items()})
+        record.update({f"val_{k}": v for k, v in val_metrics.items()})
+        history.append(record)
+        # FIX: persist history after EVERY epoch so a mid-run crash does not
+        # lose the whole training curve.
+        history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
+        progress(f"epoch {epoch}/{epochs} " +
+                 " ".join(f"{k}={v:.4f}" for k, v in record.items() if k != "epoch"))
+
+        save_checkpoint(model, optimizer, epoch, val_metrics, config,
+                        checkpoint_dir / "last.pt")
+        if val_metrics["loss"] < best_val:
+            best_val = val_metrics["loss"]
+            epochs_without_improvement = 0
+            save_checkpoint(model, optimizer, epoch, val_metrics, config,
+                            checkpoint_dir / "best.pt")
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= patience:
+                progress(f"Early stopping after {epoch} epochs "
+                         f"(no val improvement for {patience})")
+                break
+
+    progress(f"History saved: {history_path}")
+    return {"history": history, "best_val_loss": best_val,
+            "checkpoint_dir": str(checkpoint_dir)}
 
 
-def iter_qptiff_tiles(
-    path: str | Path, tile_size: int = 512, level: int = 0
-) -> Iterator[Tuple[np.ndarray, int, int]]:
-    """Yield (tile, x, y) using tifffile's Zarr-backed lazy array.
+# --------------------------------------------------------------------------- #
+# Synthetic self-test (verifies the training loop without real data)
+# --------------------------------------------------------------------------- #
 
-    Requires `zarr` and an uncompressed/compatible tiled QPTIFF. Level/series
-    and channel axes differ by scanner: inspect them before choosing a level.
-    Coordinates are at the selected resolution level, not automatically level 0.
-    REDESIGN: current implementation has NO overlap and accepts YX only;
-    instance stitching requires an explicit overlap/edge policy and scale map.
+class SyntheticAstrocyteDataset(Dataset):
+    """Tiny synthetic dataset matching the REDESIGN targets contract.
+
+    Each sample is a [1,H,W] fluorescence-like image with a few bright Gaussian
+    somas; targets are semantic_mask (0/1/2), center_heatmap [1,H,W] and an
+    all-True valid_mask. Used by --self-test only.
     """
-    # REDESIGN TODO [Zhang]: add configurable overlap/stride and stable tile IDs
-    # for instance-mask stitching; document pixel scale and source series.
-    # REDESIGN TODO [Zhang + Zhu]: select correct QPTIFF channel/series/level
-    # from scanner metadata; never assume the first series is the target stain.
-    # FIX: Validate tiling arguments; negative tile_size could silently yield no tiles.
-    if path is None or not str(path).strip():
-        raise ValueError("Slide path must not be empty")
-    if not isinstance(tile_size, (int, np.integer)) or tile_size <= 0:
-        raise ValueError("tile_size must be a positive integer")
-    if not isinstance(level, (int, np.integer)) or level < 0:
-        raise ValueError("level must be a non-negative integer")
-    path = Path(path)
-    if not path.is_file():
-        raise FileNotFoundError(f"Slide file not found: {path}")
-    import zarr
 
-    with tifffile.TiffFile(str(path)) as tif:
-        # FIX: Some TIFF files expose no readable image series.
-        if not tif.series:
-            raise ValueError("No image series found in slide")
-        series = tif.series[0]
-        if level >= len(series.levels):
-            raise ValueError(f"Level {level} unavailable; {len(series.levels)} levels")
-        selected = series.levels[level]
-        if selected.axes not in ("YX",):
-            raise ValueError(
-                f"QPTIFF axes {selected.axes!r} not supported by this basic tiler. "
-                "Select the desired channel/series before tiling."
-            )
-        store = selected.aszarr()
-        try:
-            arr = zarr.open(store, mode="r")
-            height, width = arr.shape
-            for y in range(0, height, tile_size):
-                for x in range(0, width, tile_size):
-                    tile = np.asarray(arr[y:min(y + tile_size, height),
-                                          x:min(x + tile_size, width)])
-                    yield tile, x, y
-        finally:
-            store.close()
+    def __init__(self, n_samples: int = 16, image_size: int = 128, seed: int = 0):
+        if n_samples <= 0 or image_size < 32:
+            raise ValueError("n_samples must be positive and image_size >= 32")
+        self.n_samples = n_samples
+        self.image_size = image_size
+        self.seed = seed
+
+    def __len__(self):
+        return self.n_samples
+
+    def __getitem__(self, index):
+        rng = np.random.default_rng(self.seed * 100003 + index)
+        size = self.image_size
+        yy, xx = np.mgrid[0:size, 0:size]
+        image = rng.normal(0.05, 0.02, (size, size)).astype(np.float32)
+        semantic = np.zeros((size, size), dtype=np.int64)
+        heatmap = np.zeros((size, size), dtype=np.float32)
+        for _ in range(rng.integers(2, 6)):
+            cx, cy = rng.integers(16, size - 16, 2)
+            radius = rng.integers(4, 8)
+            blob = np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * radius ** 2))
+            image += (0.6 + 0.4 * rng.random()) * blob
+            disk = (xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2
+            semantic[disk] = 1
+            ring = ((xx - cx) ** 2 + (yy - cy) ** 2 <= (2 * radius) ** 2) & ~disk
+            semantic[ring & (rng.random((size, size)) > 0.7)] = 2  # sparse processes
+            heatmap = np.maximum(heatmap, np.exp(
+                -((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * 3.0 ** 2)).astype(np.float32))
+        image = np.clip(image, 0, None)
+        image /= image.max() if image.max() > 0 else 1.0
+        return (
+            torch.from_numpy(image[None].astype(np.float32)),
+            {
+                "semantic_mask": torch.from_numpy(semantic),
+                "center_heatmap": torch.from_numpy(heatmap[None]),
+                "valid_mask": torch.ones((size, size), dtype=torch.bool),
+            },
+            {"sample_id": f"synthetic_{index:04d}"},
+        )
+
+
+def self_test(config: dict, device: torch.device, epochs: int = 3,
+              progress=print) -> dict:
+    """Run the full loop on synthetic data; assert the training loss decreases."""
+    # FIX (review B3): with a single epoch, first == last and the
+    # "loss must decrease" assertion would always misfire.
+    if not isinstance(epochs, (int, np.integer)) or epochs < 2:
+        raise ValueError("self_test needs epochs >= 2 to detect a loss decrease")
+    train_cfg = config["training"]
+    loader_kwargs = {"batch_size": min(int(train_cfg.get("batch_size", 8)), 4),
+                     "num_workers": 0}
+    train_loader = DataLoader(SyntheticAstrocyteDataset(16, seed=0), shuffle=True,
+                              **loader_kwargs)
+    val_loader = DataLoader(SyntheticAstrocyteDataset(4, seed=1), shuffle=False,
+                            **loader_kwargs)
+
+    model = build_model(config).to(device)
+    optimizer = build_optimizer(model, config)
+    criterion = build_criterion(config)
+
+    history = []
+    for epoch in range(1, epochs + 1):
+        train_metrics = run_epoch(model, train_loader, criterion, device, optimizer)
+        val_metrics = run_epoch(model, val_loader, criterion, device)
+        history.append({"epoch": epoch,
+                        **{f"train_{k}": v for k, v in train_metrics.items()},
+                        **{f"val_{k}": v for k, v in val_metrics.items()}})
+        progress(f"self-test epoch {epoch}/{epochs} "
+                 f"train_loss={train_metrics['loss']:.4f} "
+                 f"val_loss={val_metrics['loss']:.4f}")
+
+    first, last = history[0]["train_loss"], history[-1]["train_loss"]
+    if not np.isfinite(last) or last >= first:
+        raise RuntimeError(
+            f"Training loss did not decrease on synthetic data: {first:.4f} -> {last:.4f}"
+        )
+
+    # Verify checkpoint save/reload round-trip.
+    # FIX: keep self-test artifacts out of the source tree (temp dir).
+    checkpoint_dir = Path(tempfile.mkdtemp(prefix="astrocyte_selftest_"))
+    saved = save_checkpoint(model, optimizer, epochs, history[-1], config,
+                            checkpoint_dir / "best.pt")
+    reloaded = build_model(config)
+    state = torch.load(saved, map_location="cpu", weights_only=False)
+    reloaded.load_state_dict(state["model_state_dict"])
+    progress(f"Self-test passed: loss {first:.4f} -> {last:.4f}; checkpoint {saved}")
+    return {"history": history, "checkpoint": saved}
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
+
+def main():
+    parser = argparse.ArgumentParser(description="Train AstrocyteUNet")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH),
+                        help="Path to config.yaml")
+    parser.add_argument("--device", default="auto", help="auto / cpu / cuda")
+    parser.add_argument("--epochs", type=int, default=None,
+                        help="Override training.epochs (self-test default: 3)")
+    parser.add_argument("--self-test", action="store_true",
+                        help="Run the synthetic-data training-loop verification")
+    args = parser.parse_args()
+
+    config = load_config(args.config)
+    if args.epochs is not None:
+        if args.epochs <= 0:
+            raise ValueError("--epochs must be positive")
+        config["training"]["epochs"] = args.epochs
+    set_seed(int(config.get("project", {}).get("seed", 42)))
+    device = get_device(args.device)
+    print(f"device: {device}")
+
+    if args.self_test:
+        self_test(config, device, epochs=args.epochs or 3)
+        return
+
+    try:
+        train(config, device)
+    except NotImplementedError as exc:
+        raise SystemExit(
+            "Real-data training is blocked: dataset.build_dataloaders() is not "
+            f"implemented yet ({exc}). Use --self-test to verify the training loop."
+        ) from exc
 
 
 if __name__ == "__main__":
-    sample = np.random.default_rng(0).integers(0, 65535, (256, 256), dtype=np.uint16)
-    tensor = prepare_image(sample)
-    print("Prepared image:", tuple(tensor.shape), tensor.dtype)
+    main()

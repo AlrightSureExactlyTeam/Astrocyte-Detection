@@ -19,19 +19,46 @@ else:
     from preprocessing import load_image, prepare_image
 
 
-def run_cellpose(image: np.ndarray, use_gpu: bool = False) -> np.ndarray:
-    """Run Cellpose-SAM (`cpsam`) on a single 2D grayscale image."""
+def run_cellpose(
+    image: np.ndarray,
+    use_gpu: bool = False,
+    channel: int | None = None,
+    diameter: float | None = None,
+    min_size: int = 15,
+    max_size_fraction: float = 0.4,
+) -> np.ndarray:
+    """Run Cellpose-SAM on one image and return a 2D instance label mask."""
     from cellpose import models
 
-    model = models.CellposeModel(gpu=use_gpu, pretrained_model="cpsam")
-    gray = prepare_image(image).squeeze(0).numpy()
-    # FIX: API outputs vary across Cellpose versions; only the first result is needed.
-    result = model.eval(gray)
+    gray = prepare_image(image, channel=channel).squeeze(0).numpy()
+
+    model = models.CellposeModel(
+        gpu=use_gpu,
+        pretrained_model="cpsam",
+    )
+    result = model.eval(
+        gray,
+        normalize=False,  # prepare_image
+        diameter=diameter,
+        min_size=min_size,
+        max_size_fraction=max_size_fraction,
+    )
+
     masks = result[0] if isinstance(result, (tuple, list)) else result
     masks = np.asarray(masks)
+
     if masks.ndim != 2 or masks.shape != gray.shape:
-        raise ValueError(f"Unexpected Cellpose mask shape {masks.shape}; expected {gray.shape}")
-    # REDESIGN: Retain the original instance labels for mask-level evaluation.
+        raise ValueError(
+            f"Unexpected Cellpose mask shape {masks.shape}; "
+            f"expected {gray.shape}"
+        )
+
+    if not np.issubdtype(masks.dtype, np.integer):
+        raise TypeError(f"Cellpose masks must be integer labels, got {masks.dtype}")
+
+    if np.any(masks < 0):
+        raise ValueError("Cellpose masks contain negative labels")
+
     return masks
 
 
@@ -85,19 +112,37 @@ def main():
     parser.add_argument("--image", required=True, help="Path to PNG/TIF/TIFF image")
     parser.add_argument("--out", default="results/cellpose", help="Output directory")
     parser.add_argument("--gpu", action="store_true", help="Use CUDA if Cellpose supports it")
+    parser.add_argument("--channel", type=int, default=None)
+    parser.add_argument("--diameter", type=float, default=None)
+    parser.add_argument("--min-size", type=int, default=15)
+    parser.add_argument("--max-size-fraction", type=float, default=0.4)
     args = parser.parse_args()
 
     image = load_image(args.image)
-    masks = run_cellpose(image, use_gpu=args.gpu)
-    centers = mask_centers(masks)
-    save_results(image, centers, Path(args.out))
+    masks = run_cellpose(
+        image,
+        use_gpu=args.gpu,
+        channel=args.channel,
+        diameter=args.diameter,
+        min_size=args.min_size,
+        max_size_fraction=args.max_size_fraction,
+    )
+
     # IMPLEMENTED [Liu]: save full-resolution instance label mask losslessly;
     # compare Cellpose morphology/instance metrics to U-Net on identical images.
+    if masks.size == 0:
+        raise ValueError("Cellpose returned an empty mask array")
+
     if masks.max() > np.iinfo(np.uint32).max:
-        raise ValueError("Instance ID exceeds uint32 range.")
+        raise ValueError("Instance ID exceeds uint32 range")
+
+    masks = masks.astype(np.uint32, copy=False)
+    centers = mask_centers(masks)
+
+    save_results(image, centers, Path(args.out))
 
     mask_path = Path(args.out) / "cellpose_instance_mask.tif"
-    tifffile.imwrite(str(mask_path), masks.astype(np.uint32))
+    tifffile.imwrite(str(mask_path), masks)
     print(f"Instance mask saved: {mask_path}")
 
 if __name__ == "__main__":

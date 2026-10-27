@@ -57,9 +57,13 @@ def _scores(tp: int, fp: int, fn: int) -> Dict[str, float]:
     return {"precision": float(precision), "recall": float(recall), "f1": float(f1)}
 
 
-def match_points(pred_points: np.ndarray, gt_points: np.ndarray, max_distance: float):
+def match_points(pred_points: np.ndarray, gt_points: np.ndarray, max_distance: float, pixel_size_um: float | None = None,):
     """Match (x,y) centers one-to-one; matches are (pred_index, gt_index, distance)."""
     # IMPLEMENTED [Liu]: Maximize eligible matches first, then minimize distance.
+    if pixel_size_um is not None:
+        if not np.isfinite(pixel_size_um) or pixel_size_um <= 0:
+            raise ValueError("pixel_size_um must be finite and positive")
+        max_distance = max_distance / pixel_size_um
     pred = _points(pred_points, "pred_points")
     gt = _points(gt_points, "gt_points")
     if not np.isfinite(max_distance) or max_distance < 0:

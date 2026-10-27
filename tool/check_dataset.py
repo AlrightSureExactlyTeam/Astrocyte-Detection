@@ -12,7 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT = ROOT / "datasets" / "BBBC042"
 IMAGE_DIR = DATA_ROOT / "images"
 POSITION_DIR = DATA_ROOT / "positions"
-IMAGE_EXTENSIONS = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
+# FIX (review): keep in sync with preprocessing.load_image, which accepts only
+# PNG/TIF/TIFF. .jpg/.jpeg are lossy and intentionally NOT valid dataset
+# images; previously they passed this inventory check and only failed much
+# later inside load_image.
+IMAGE_EXTENSIONS = {".tif", ".tiff", ".png"}
 
 
 def collect_files(folder: Path, extensions: set[str]) -> list[Path]:
@@ -26,6 +30,13 @@ def summarize_dataset() -> dict:
     """Report file counts and possible filename mismatches (not coordinate validity)."""
     images = collect_files(IMAGE_DIR, IMAGE_EXTENSIONS)
     positions = collect_files(POSITION_DIR, {".txt"})
+    # FIX: report unsupported files (e.g. stray .jpg) instead of silently
+    # dropping them, so a wrong-format file is visible during QC.
+    ignored = sorted(
+        str(p.relative_to(IMAGE_DIR))
+        for p in IMAGE_DIR.rglob("*")
+        if p.is_file() and p.suffix.lower() not in IMAGE_EXTENSIONS
+    )
     image_ids = Counter(p.stem for p in images)
     position_ids = Counter(p.stem for p in positions)
     return {
@@ -35,6 +46,7 @@ def summarize_dataset() -> dict:
         "duplicate_position_stems": sorted(k for k, v in position_ids.items() if v > 1),
         "images_without_matching_stem": sorted(image_ids.keys() - position_ids.keys()),
         "positions_without_matching_stem": sorted(position_ids.keys() - image_ids.keys()),
+        "unsupported_files_ignored": ignored,
     }
 
 

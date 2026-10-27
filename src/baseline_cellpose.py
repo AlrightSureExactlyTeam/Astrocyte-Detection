@@ -119,6 +119,16 @@ def main():
     args = parser.parse_args()
 
     image = load_image(args.image)
+    # FIX (review): the "never mix fluorescence channels as RGB" rule is
+    # enforced here at the CLI boundary. prepare_image intentionally keeps
+    # its documented RGB->gray behavior for true RGB photos; any multi-channel
+    # baseline input must name its target channel explicitly.
+    if image.ndim == 3 and args.channel is None:
+        raise SystemExit(
+            f"{args.image} has {image.shape[-1]} channels; pass --channel N "
+            "based on microscopy metadata (fluorescence channels must not be "
+            "mixed as RGB grayscale)."
+        )
     masks = run_cellpose(
         image,
         use_gpu=args.gpu,

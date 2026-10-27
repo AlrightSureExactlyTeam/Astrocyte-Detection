@@ -10,6 +10,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from skimage.measure import regionprops
+import tifffile
 
 # FIX: Use an explicit package/script import branch; avoid swallowing errors inside preprocessing.
 if __package__:
@@ -90,9 +91,14 @@ def main():
     masks = run_cellpose(image, use_gpu=args.gpu)
     centers = mask_centers(masks)
     save_results(image, centers, Path(args.out))
-    # REDESIGN TODO [Liu]: save full-resolution instance label mask losslessly;
+    # IMPLEMENTED [Liu]: save full-resolution instance label mask losslessly;
     # compare Cellpose morphology/instance metrics to U-Net on identical images.
+    if masks.max() > np.iinfo(np.uint32).max:
+        raise ValueError("Instance ID exceeds uint32 range.")
 
+    mask_path = Path(args.out) / "cellpose_instance_mask.tif"
+    tifffile.imwrite(str(mask_path), masks.astype(np.uint32))
+    print(f"Instance mask saved: {mask_path}")
 
 if __name__ == "__main__":
     main()

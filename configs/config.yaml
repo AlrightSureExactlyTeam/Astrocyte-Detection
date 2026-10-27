@@ -26,8 +26,8 @@ model:
   architecture: unet
   encoder: resnet18
   encoder_weights: null
-  output_channels: 1
-  # TODO [Liu]: ensure model output is logits (no final sigmoid during training).
+  output_channels: 4  # REDESIGN: 3 semantic classes (bg/soma/process) + 1 center channel.
+  # Model returns raw logits (no final softmax/sigmoid during training).
 
 training:
   batch_size: 8  # TODO [Liu]: adjust to available GPU memory.

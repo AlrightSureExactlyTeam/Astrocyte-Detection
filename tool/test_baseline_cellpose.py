@@ -149,6 +149,7 @@ class TestBaselineCellpose(unittest.TestCase):
     def test_main_forwards_cli_parameters_and_saves_uint32_mask(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
+            image = np.repeat(self.image[..., None], 3, axis=2)
             argv = [
                 "baseline_cellpose.py",
                 "--image", "dummy.png",
@@ -161,13 +162,13 @@ class TestBaselineCellpose(unittest.TestCase):
             ]
             with (
                 patch.object(sys, "argv", argv),
-                patch.object(baseline, "load_image", return_value=self.image),
+                patch.object(baseline, "load_image", return_value=image),
                 patch.object(baseline, "run_cellpose", return_value=self.masks) as run_mock,
             ):
                 baseline.main()
 
             run_mock.assert_called_once_with(
-                self.image,
+                image,
                 use_gpu=True,
                 channel=2,
                 diameter=40.0,
@@ -177,6 +178,21 @@ class TestBaselineCellpose(unittest.TestCase):
             saved_mask = tifffile.imread(output_dir / "cellpose_instance_mask.tif")
             self.assertEqual(saved_mask.dtype, np.uint32)
             np.testing.assert_array_equal(saved_mask, self.masks)
+
+    def test_rejects_invalid_cellpose_parameters(self):
+        cases = [
+            {"diameter": 0}, {"diameter": np.nan}, {"min_size": 0},
+            {"min_size": 1.5}, {"max_size_fraction": 0}, {"max_size_fraction": 1.1},
+        ]
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(ValueError):
+                    baseline.run_cellpose(self.image, **kwargs)
+
+    def test_mask_centers_preserves_large_uint32_ids(self):
+        masks = np.zeros((4, 4), dtype=np.uint32)
+        masks[1:3, 1:3] = 2 ** 31 + 5
+        self.assertEqual(baseline.mask_centers(masks), [(2 ** 31 + 5, 2, 2)])
 
 
 if __name__ == "__main__":

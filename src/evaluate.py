@@ -71,6 +71,9 @@ def match_points(pred_points: np.ndarray, gt_points: np.ndarray, max_distance: f
     n, m = len(pred), len(gt)
     if not n or not m:
         return {"tp": 0, "fp": n, "fn": m, "matches": []}
+    # FIX [Liu]: reject excessive dense matrices before allocating memory.
+    if n * (m + n) > 25_000_000:
+        raise ValueError("Point sets are too large for dense one-to-one matching")
     dist = cdist(pred, gt)
     # FIX: A dummy column per prediction permits unmatched points. A cost of
     # (min(n,m)+1)*(max_distance+1) ensures one more valid match always wins.
@@ -114,8 +117,15 @@ def counting_metrics(pred_counts, gt_counts) -> Dict[str, float]:
     # IMPLEMENTED [Liu]: Calculate counting errors.
     errors = p.astype(np.float64) - g.astype(np.float64)
 
-    mae = np.mean(np.abs(errors))
-    rmse = np.sqrt(np.mean(errors ** 2))
+    absolute_errors = np.abs(errors)
+    scale = float(absolute_errors.max())
+    if scale == 0:
+        mae = rmse = 0.0
+    else:
+        # FIX [Liu]: normalize before sums and squares to avoid overflow.
+        scaled_errors = absolute_errors / scale
+        mae = scale * np.mean(scaled_errors)
+        rmse = scale * np.sqrt(np.mean(scaled_errors ** 2))
 
     return {
         "mae": float(mae),

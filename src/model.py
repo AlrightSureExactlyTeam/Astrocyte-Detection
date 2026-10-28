@@ -27,7 +27,7 @@ class AstrocyteUNet(nn.Module):
             activation=None,
         )
 
-    def forward(self, images: torch.Tensor) -> torch.Tensor:
+    def forward(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
         # FIX: Validate input before the encoder fails with opaque shape/channel errors.
         if not isinstance(images, torch.Tensor):
             raise TypeError("images must be a torch.Tensor [B,C,H,W]")

@@ -15,7 +15,7 @@ try:
 except ImportError:
     sys.modules["segmentation_models_pytorch"] = types.SimpleNamespace(Unet=None)
 
-from train import CompositeLoss
+from train import CompositeLoss, build_criterion, validate_config
 
 
 class TestCompositeLoss(unittest.TestCase):
@@ -51,6 +51,55 @@ class TestCompositeLoss(unittest.TestCase):
         for value in losses.values():
             self.assertTrue(np.isfinite(float(value.detach())))
             self.assertEqual(float(value.detach()), 0.0)
+
+    def test_shared_valid_mask_excludes_semantic_pixels(self):
+        self.targets["valid_mask"][:] = False
+        self.targets["semantic_valid_mask"] = torch.ones(1, 4, 5, dtype=torch.bool)
+        losses = CompositeLoss()(self.outputs, self.targets)
+        self.assertEqual(float(losses["semantic_loss"].detach()), 0.0)
+        self.assertEqual(float(losses["loss"].detach()), 0.0)
+
+    def test_invalid_supervision_is_rejected(self):
+        self.targets["semantic_mask"][0, 0, 0] = 3
+        with self.assertRaises(ValueError):
+            CompositeLoss()(self.outputs, self.targets)
+        self.targets["semantic_mask"].zero_()
+        self.targets["center_heatmap"][0, 0, 0, 0] = np.nan
+        with self.assertRaises(ValueError):
+            CompositeLoss()(self.outputs, self.targets)
+
+    def test_criterion_uses_configured_loss_weights(self):
+        criterion = build_criterion({
+            "training": {"loss": "bce_with_logits", "semantic_weight": 0.25, "center_weight": 2.0}
+        })
+        self.assertEqual(criterion.semantic_weight, 0.25)
+        self.assertEqual(criterion.center_weight, 2.0)
+
+
+class TestTrainingConfig(unittest.TestCase):
+    def valid_config(self):
+        return {
+            "project": {"seed": 42},
+            "data": {"input_channels": 1, "image_size": [32, 32]},
+            "model": {"output_channels": 4},
+            "training": {
+                "epochs": 2, "batch_size": 2, "num_workers": 0,
+                "early_stopping_patience": 1, "learning_rate": 1e-4,
+            },
+        }
+
+    def test_rejects_fractional_and_nonfinite_configuration(self):
+        cases = [
+            (("training", "epochs"), 1.5), (("training", "batch_size"), 0),
+            (("training", "learning_rate"), np.nan), (("data", "input_channels"), 1.5),
+            (("project", "seed"), -1), (("data", "image_size"), [32, 0]),
+        ]
+        for (section, key), value in cases:
+            with self.subTest(section=section, key=key, value=value):
+                config = self.valid_config()
+                config[section][key] = value
+                with self.assertRaises(ValueError):
+                    validate_config(config)
 
 
 if __name__ == "__main__":

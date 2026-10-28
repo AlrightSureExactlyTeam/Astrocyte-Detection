@@ -54,22 +54,10 @@ def load_image(path: str | Path) -> np.ndarray:
 
 
 def _load_tiff(path: Path) -> np.ndarray:
-    """Load a TIFF using axis metadata instead of shape guessing.
+    """Load one unambiguous 2D/HWC image without guessing stack semantics.
 
-    FIX (review A1/A5): decide the axis layout from tifffile's `series.axes`,
-    not from `2 <= shape[0] <= 8` heuristics:
-    - Z/T stacks are rejected (mixing z-planes/timepoints into RGB silently
-      corrupts fluorescence data); select a single plane first.
-    - (1,H,W) single-channel exports (Fiji/ImageJ) are squeezed to 2D.
-    - Planar multi-channel TIFFs (C/Q axis first) are transposed to HWC so
-      prepare_image(channel=...) / --channel work.
-    - HWC sample layouts (YXS, last axis 3/4) are returned unchanged.
-
-    KNOWN LIMITATION: a 3-plane stack saved WITHOUT axis metadata is
-    indistinguishable from planar 3-channel data (tifffile labels both QYX),
-    so it will be transposed to (H,W,3). There is no shape-based way to tell
-    the two apart. When exporting z-stacks, write axes metadata (e.g.
-    metadata={"axes": "ZYX"}), or extract the single plane before loading.
+    Z/T stacks are rejected. Planar channels require explicit ``CYX`` metadata;
+    ambiguous ``QYX`` data must be exported with channel or plane metadata.
     """
     with tifffile.TiffFile(str(path)) as tif:
         if not tif.series:
@@ -87,13 +75,18 @@ def _load_tiff(path: Path) -> np.ndarray:
             raise ValueError(
                 f"TIFF has a stack axis ({axes!r}); select a single plane first."
             )
-        if axes.endswith("S") or image.shape[-1] in (3, 4):
-            pass  # HWC samples (RGB/RGBA); returned unchanged.
+        if axes.endswith("S"):
+            pass  # Explicit HWC samples (RGB/RGBA); returned unchanged.
         elif image.shape[0] == 1:
             image = image[0]  # (1,H,W) single-channel export -> (H,W)
-        else:
-            # Planar (C,H,W); without metadata tifffile labels the axis Q.
+        elif axes == "CYX":
             image = np.moveaxis(image, 0, -1)
+        else:
+            # FIX [Liu]: never infer channels from a length-3/4 dimension.
+            raise ValueError(
+                f"Ambiguous TIFF axes {axes!r}; export explicit CYX/YXS metadata "
+                "or select one plane instead of relying on shape guessing."
+            )
     return image
 
 
@@ -173,6 +166,8 @@ def _select_plane_index(axes: str, shape: tuple, channel: int | None) -> tuple[i
             f"Slide axes {axes!r} not supported by this tiler. "
             "Expected YX or a single-channel-axis layout such as CYX/QYX/YXS."
         )
+    if "Z" in axes or "T" in axes:
+        raise ValueError(f"Slide axes {axes!r} contain a stack axis; select one plane first")
     # IMPLEMENTED [Zhang]: tifffile labels the non-spatial axis C (channel),
     # Q (unknown) or S (samples) depending on metadata; accept exactly one
     # extra axis as the channel axis and require an explicit channel choice.
@@ -271,8 +266,8 @@ def iter_qptiff_tiles(
                     index[y_axis] = slice(y, min(y + tile_size, height))
                     index[x_axis] = slice(x, min(x + tile_size, width))
                     tile = np.asarray(arr[tuple(index)])
-                    if tile.ndim > 2:
-                        tile = np.squeeze(tile)
+                    if tile.ndim != 2:
+                        raise ValueError(f"Selected tile must be 2D, got {tile.shape}")
                     if not with_meta:
                         yield tile, x, y
                     else:

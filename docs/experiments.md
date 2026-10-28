@@ -200,3 +200,106 @@ The updated tests cover current Cellpose parameter forwarding and output validat
 | `test_train.py` | `test_point_only_targets_exclude_semantic_loss` | OK |
 
 All 49 unit tests passed, covering the Cellpose baseline, coordinate validation, dataset loading, evaluation, postprocessing, prediction, and point-only training loss. These tests used synthetic inputs and mocked model inference; they do not establish real-data training convergence or real-image detection accuracy.
+
+---
+
+## Experiment 005.v1: Comprehensive Robustness and Interface Regression Tests
+
+**Date:** 2026-10-28
+**Environment:** Conda `astrocyte`
+**Command:** `python -m unittest discover -s tool -p "test_*.py" -v`
+**Status:** Passed — 74/74 tests in 0.971 seconds
+
+| Test module | Passed | Failed / Errors | Result |
+| --- | ---: | ---: | --- |
+| `test_baseline_cellpose.py` | 11 | 0 | OK |
+| `test_check_dataset.py` | 2 | 0 | OK |
+| `test_dataset.py` | 12 | 0 | OK |
+| `test_evaluate.py` | 18 | 0 | OK |
+| `test_model.py` | 2 | 0 | OK |
+| `test_postprocessing.py` | 7 | 0 | OK |
+| `test_predict.py` | 10 | 0 | OK |
+| `test_preprocessing.py` | 6 | 0 | OK |
+| `test_train.py` | 6 | 0 | OK |
+| **Total** | **74** | **0** | **Passed** |
+
+### Full Test Results
+
+| Test module | Test case | Result |
+| --- | --- | --- |
+| `test_baseline_cellpose.py` | `test_main_forwards_cli_parameters_and_saves_uint32_mask` | OK |
+| `test_baseline_cellpose.py` | `test_mask_centers_accepts_empty_label_map` | OK |
+| `test_baseline_cellpose.py` | `test_mask_centers_preserves_large_uint32_ids` | OK |
+| `test_baseline_cellpose.py` | `test_mask_centers_rejects_malformed_labels` | OK |
+| `test_baseline_cellpose.py` | `test_mask_centers_returns_exact_id_xy_rows` | OK |
+| `test_baseline_cellpose.py` | `test_rejects_invalid_cellpose_parameters` | OK |
+| `test_baseline_cellpose.py` | `test_run_cellpose_passes_current_parameters` | OK |
+| `test_baseline_cellpose.py` | `test_run_cellpose_rejects_invalid_model_output` | OK |
+| `test_baseline_cellpose.py` | `test_run_cellpose_selects_requested_channel` | OK |
+| `test_baseline_cellpose.py` | `test_save_results_rejects_invalid_centers_before_creating_output` | OK |
+| `test_baseline_cellpose.py` | `test_save_results_writes_exact_csv_and_overlay` | OK |
+| `test_check_dataset.py` | `test_accepts_in_bounds_centers` | OK |
+| `test_check_dataset.py` | `test_rejects_out_of_bounds_centers` | OK |
+| `test_dataset.py` | `test_heatmap_has_gaussian_peak_and_handles_empty_points` | OK |
+| `test_dataset.py` | `test_reads_bbb042_boxes_as_centers` | OK |
+| `test_dataset.py` | `test_reads_xy_csv_and_explicit_empty_annotation` | OK |
+| `test_dataset.py` | `test_rejects_malformed_annotation` | OK |
+| `test_dataset.py` | `test_build_dataloaders_splits_by_source_image` | OK |
+| `test_dataset.py` | `test_explicit_group_split_is_reproducible_and_leakage_free` | OK |
+| `test_dataset.py` | `test_legacy_transform_is_rejected_when_masks_exist` | OK |
+| `test_dataset.py` | `test_mask_aware_geometric_transforms_keep_all_targets_aligned` | OK |
+| `test_dataset.py` | `test_point_only_sample_disables_semantic_supervision` | OK |
+| `test_dataset.py` | `test_rejects_out_of_bounds_source_annotations` | OK |
+| `test_dataset.py` | `test_rejects_unpaired_files` | OK |
+| `test_dataset.py` | `test_resize_transforms_image_points_and_masks_consistently` | OK |
+| `test_evaluate.py` | `test_exports_csv_content` | OK |
+| `test_evaluate.py` | `test_exports_json_content_and_creates_parent_directory` | OK |
+| `test_evaluate.py` | `test_rejects_invalid_report_arguments` | OK |
+| `test_evaluate.py` | `test_distance_threshold_is_inclusive` | OK |
+| `test_evaluate.py` | `test_empty_point_sets` | OK |
+| `test_evaluate.py` | `test_matches_indices_distances_and_counts` | OK |
+| `test_evaluate.py` | `test_maximizes_match_count_before_minimizing_distance` | OK |
+| `test_evaluate.py` | `test_minimizes_distance_among_maximum_matchings` | OK |
+| `test_evaluate.py` | `test_one_to_one_matching_selects_nearest_prediction` | OK |
+| `test_evaluate.py` | `test_pixel_size_converts_threshold_but_reports_pixel_distance` | OK |
+| `test_evaluate.py` | `test_rejects_invalid_points_thresholds_and_pixel_size` | OK |
+| `test_evaluate.py` | `test_counting_metrics` | OK |
+| `test_evaluate.py` | `test_counting_metrics_rejects_invalid_inputs` | OK |
+| `test_evaluate.py` | `test_counting_rmse_avoids_overflow` | OK |
+| `test_evaluate.py` | `test_detection_metrics` | OK |
+| `test_evaluate.py` | `test_detection_metrics_empty_conventions` | OK |
+| `test_evaluate.py` | `test_detection_metrics_rejects_invalid_counts` | OK |
+| `test_evaluate.py` | `test_excessive_dense_matching_is_rejected_before_allocation` | OK |
+| `test_model.py` | `test_invalid_image_tensor_is_rejected` | OK |
+| `test_model.py` | `test_two_head_forward_contract_without_pretrained_weights` | OK |
+| `test_postprocessing.py` | `test_extract_centers_rejects_invalid_input` | OK |
+| `test_postprocessing.py` | `test_extracts_xy_centers_and_empty_result` | OK |
+| `test_postprocessing.py` | `test_global_coordinate_conversion` | OK |
+| `test_postprocessing.py` | `test_probability_conversion` | OK |
+| `test_postprocessing.py` | `test_decodes_semantic_labels_and_uncertainty` | OK |
+| `test_postprocessing.py` | `test_separates_two_foreground_instances` | OK |
+| `test_postprocessing.py` | `test_unassigned_centers_do_not_create_instances` | OK |
+| `test_predict.py` | `test_background_semantics_do_not_remove_center` | OK |
+| `test_predict.py` | `test_checkpoint_schema_and_strict_loading` | OK |
+| `test_predict.py` | `test_global_dedup_uses_overlap_provenance_and_deterministic_representatives` | OK |
+| `test_predict.py` | `test_invalid_prediction_outputs_do_not_create_final_files` | OK |
+| `test_predict.py` | `test_predict_heatmap_uses_correct_activations` | OK |
+| `test_predict.py` | `test_save_predictions_accepts_verified_empty_points` | OK |
+| `test_predict.py` | `test_single_image_prediction_and_saved_outputs` | OK |
+| `test_predict.py` | `test_whole_slide_deduplicates_only_exact_within_tile_points` | OK |
+| `test_predict.py` | `test_whole_slide_deduplicates_overlap_and_saves_tiles` | OK |
+| `test_predict.py` | `test_whole_slide_keeps_raw_centers_when_assignment_fails` | OK |
+| `test_preprocessing.py` | `test_corrupted_tiff_is_not_an_empty_image` | OK |
+| `test_preprocessing.py` | `test_explicit_planar_channels_and_ambiguous_tiff` | OK |
+| `test_preprocessing.py` | `test_grayscale_and_rgb_png` | OK |
+| `test_preprocessing.py` | `test_empty_constant_and_single_pixel_images` | OK |
+| `test_preprocessing.py` | `test_small_tiled_image_preserves_coordinates_and_edge_shapes` | OK |
+| `test_preprocessing.py` | `test_stack_axes_are_not_channels` | OK |
+| `test_train.py` | `test_criterion_uses_configured_loss_weights` | OK |
+| `test_train.py` | `test_fully_ignored_batch_has_finite_zero_loss` | OK |
+| `test_train.py` | `test_invalid_supervision_is_rejected` | OK |
+| `test_train.py` | `test_point_only_targets_exclude_semantic_loss` | OK |
+| `test_train.py` | `test_shared_valid_mask_excludes_semantic_pixels` | OK |
+| `test_train.py` | `test_rejects_fractional_and_nonfinite_configuration` | OK |
+
+All 74 unit tests passed. New coverage includes mask-aware geometric transforms, explicit group-based splitting, strict training configuration, ambiguous TIFF rejection, tiled-image edge shapes, cross-tile center deduplication and provenance, prediction-output prevalidation, large instance IDs, and numerical overflow guards. The run emitted an expected warning for center-only supervision and a `tifffile` deprecation warning; neither was a test failure. Tests used synthetic inputs and mocked external model inference, so this result does not establish real-data training convergence, real QPTIFF performance, or real-image biological accuracy.

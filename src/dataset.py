@@ -112,6 +112,15 @@ class AstrocyteDataset(Dataset):
             }
             for stem in sorted(images)
         ]
+        self.supervision_summary = {
+            "sample_count": len(self.samples),
+            "semantic_supervised_samples": sum(
+                sample["semantic_mask_path"] is not None for sample in self.samples
+            ),
+            "instance_supervised_samples": sum(
+                sample["instance_mask_path"] is not None for sample in self.samples
+            ),
+        }
 
     def __len__(self):
         return len(self.samples)
@@ -153,26 +162,78 @@ class AstrocyteDataset(Dataset):
         # IMPLEMENTED [Liu]: apply identical resize geometry to image and points.
         image = prepare_image(raw_image, channel=self.channel).unsqueeze(0)
         height, width = self.image_size
+        resize_scale_xy = (width / original_width, height / original_height)
         image = F.interpolate(
             image, size=self.image_size, mode="bilinear", align_corners=False
         )[0]
         scaled_points = points.copy()
         if len(scaled_points):
-            scaled_points[:, 0] *= width / original_width
-            scaled_points[:, 1] *= height / original_height
-        if self.transform is not None:
-            image, scaled_points = self.transform(image, scaled_points)
-            scaled_points = _validate_points(scaled_points)
-
+            scaled_points[:, 0] *= resize_scale_xy[0]
+            scaled_points[:, 1] *= resize_scale_xy[1]
         semantic_mask = self._load_mask(
             sample["semantic_mask_path"], (original_height, original_width)
         )
         instance_mask = self._load_mask(
             sample["instance_mask_path"], (original_height, original_width)
         )
+
+        if self.transform is not None:
+            has_masks = semantic_mask is not None or instance_mask is not None
+            if has_masks:
+                # FIX [Liu]: legacy two-output transforms cannot keep mask labels aligned.
+                transform_with_masks = getattr(self.transform, "transform_with_masks", None)
+                if not callable(transform_with_masks):
+                    raise ValueError(
+                        "Transforms on mask-bearing samples must implement "
+                        "transform_with_masks(image, points, semantic_mask, instance_mask)"
+                    )
+                transformed = transform_with_masks(
+                    image, scaled_points, semantic_mask, instance_mask
+                )
+                if not isinstance(transformed, (tuple, list)) or len(transformed) != 4:
+                    raise ValueError("transform_with_masks must return four outputs")
+                image, scaled_points, semantic_mask, instance_mask = transformed
+            else:
+                transformed = self.transform(image, scaled_points)
+                if not isinstance(transformed, (tuple, list)) or len(transformed) != 2:
+                    raise ValueError("transform must return (image, points)")
+                image, scaled_points = transformed
+            scaled_points = _validate_points(scaled_points)
+
+        if not isinstance(image, torch.Tensor) or image.ndim != 3:
+            raise ValueError("Transformed image must be a [C,H,W] torch.Tensor")
+        height, width = int(image.shape[-2]), int(image.shape[-1])
+        if height <= 0 or width <= 0:
+            raise ValueError("Transformed image must have non-empty spatial dimensions")
+        for name, mask in (("semantic_mask", semantic_mask), ("instance_mask", instance_mask)):
+            if mask is None:
+                continue
+            mask = np.asarray(mask)
+            if (
+                mask.shape != (height, width)
+                or not np.issubdtype(mask.dtype, np.integer)
+                or np.any(mask < 0)
+            ):
+                raise ValueError(
+                    f"Transformed {name} must be a non-negative integer [{height},{width}] array"
+                )
+            if name == "semantic_mask":
+                semantic_mask = mask
+            else:
+                instance_mask = mask
         if semantic_mask is not None and np.any(semantic_mask > 2):
             raise ValueError("semantic masks must use labels 0=background, 1=soma, 2=process")
 
+        # FIX [Liu]: reject transformed points outside the final crop/canvas.
+        out_of_bounds = (
+            (scaled_points[:, 0] < 0) | (scaled_points[:, 0] >= width)
+            | (scaled_points[:, 1] < 0) | (scaled_points[:, 1] >= height)
+        )
+        if np.any(out_of_bounds):
+            raise ValueError(
+                f"Transform produced out-of-bounds points in sample {sample['sample_id']!r}: "
+                f"{scaled_points[out_of_bounds][:5].tolist()}"
+            )
         heatmap = points_to_heatmap(scaled_points, height, width, self.sigma)
         targets = {
             "semantic_mask": torch.from_numpy(
@@ -196,8 +257,8 @@ class AstrocyteDataset(Dataset):
             "image_path": str(sample["image_path"]),
             "annotation_path": str(sample["annotation_path"]),
             "original_size": (original_height, original_width),
-            "image_size": self.image_size,
-            "scale_xy": (width / original_width, height / original_height),
+            "image_size": (height, width),
+            "scale_xy": resize_scale_xy,
             "tile_offset": (0, 0),
             "level": 0,
             "annotation_available": True,
@@ -275,11 +336,46 @@ def _seed_worker(worker_id: int) -> None:
     random.seed(seed)
 
 
+def _group_split(dataset, group_map, fractions, seed):
+    """Split explicit source groups without inferring identities from filenames."""
+    if not isinstance(group_map, dict):
+        raise ValueError("data.groups must map every sample_id to a reliable source group")
+    sample_ids = [sample["sample_id"] for sample in dataset.samples]
+    missing = sorted(set(sample_ids) - set(group_map))
+    if missing:
+        raise ValueError(f"data.groups is missing sample IDs: {missing[:10]}")
+    grouped_indices = {}
+    for index, sample_id in enumerate(sample_ids):
+        group_id = group_map[sample_id]
+        if not isinstance(group_id, (str, int, np.integer)) or not str(group_id).strip():
+            raise ValueError("Group IDs must be non-empty strings or integers")
+        grouped_indices.setdefault(group_id, []).append(index)
+    if len(grouped_indices) < 2:
+        raise ValueError("Group splitting needs at least two source groups")
+
+    groups = sorted(grouped_indices, key=str)
+    random.Random(seed).shuffle(groups)
+    buckets = [[], [], []]
+    counts = [0, 0, 0]
+    total = len(dataset)
+    # FIX [Liu]: assign whole groups to the largest remaining sample deficit.
+    tie_priority = (2, 0, 1)  # validation wins a tie, then test, then training.
+    for group_id in groups:
+        deficits = [fractions[i] * total - counts[i] for i in range(3)]
+        partition = max(range(3), key=lambda i: (deficits[i], -tie_priority[i]))
+        buckets[partition].extend(grouped_indices[group_id])
+        counts[partition] += len(grouped_indices[group_id])
+    return buckets, grouped_indices
+
+
 def build_dataloaders(config: dict):
-    """Build deterministic train/validation loaders split by source image."""
+    """Build reproducible loaders, optionally split by explicit source groups."""
     data_cfg = config["data"]
     train_cfg = config["training"]
-    if int(data_cfg.get("input_channels", 1)) != 1:
+    input_channels = data_cfg.get("input_channels", 1)
+    if isinstance(input_channels, (bool, np.bool_)) or not isinstance(
+        input_channels, (int, np.integer)
+    ) or input_channels != 1:
         raise ValueError("The current dataset pipeline supports one input channel")
 
     dataset = AstrocyteDataset(
@@ -291,30 +387,75 @@ def build_dataloaders(config: dict):
         semantic_mask_dir=data_cfg.get("semantic_mask_dir"),
         instance_mask_dir=data_cfg.get("instance_mask_dir"),
     )
-    train_fraction = float(data_cfg.get("train_fraction", 0.7))
-    val_fraction = float(data_cfg.get("val_fraction", 0.15))
-    test_fraction = float(data_cfg.get("test_fraction", 0.15))
-    fractions = np.asarray([train_fraction, val_fraction, test_fraction])
+    fractions = np.asarray([
+        float(data_cfg.get("train_fraction", 0.7)),
+        float(data_cfg.get("val_fraction", 0.15)),
+        float(data_cfg.get("test_fraction", 0.15)),
+    ])
     if not np.isfinite(fractions).all() or np.any(fractions < 0) or not np.isclose(fractions.sum(), 1.0):
         raise ValueError("train/val/test fractions must be nonnegative and sum to 1")
+    seed = config.get("project", {}).get("seed", 42)
+    if isinstance(seed, (bool, np.bool_)) or not isinstance(seed, (int, np.integer)) or seed < 0:
+        raise ValueError("project.seed must be a non-negative integer")
 
-    indices = list(range(len(dataset)))
-    random.Random(int(config.get("project", {}).get("seed", 42))).shuffle(indices)
-    n_train = int(len(indices) * train_fraction)
-    n_val = int(len(indices) * val_fraction)
-    if n_train == 0 or n_val == 0:
+    group_map = data_cfg.get("groups")
+    if group_map is not None:
+        buckets, grouped_indices = _group_split(dataset, group_map, fractions, seed)
+        train_indices, val_indices = buckets[0], buckets[1]
+    else:
+        indices = list(range(len(dataset)))
+        random.Random(seed).shuffle(indices)
+        n_train = int(len(indices) * fractions[0])
+        n_val = int(len(indices) * fractions[1])
+        buckets = [indices[:n_train], indices[n_train:n_train + n_val], indices[n_train + n_val:]]
+        grouped_indices = None
+        train_indices, val_indices = buckets[0], buckets[1]
+    if not train_indices or not val_indices:
         raise ValueError("Dataset split must contain at least one training and one validation image")
-    train_subset = Subset(dataset, indices[:n_train])
-    val_subset = Subset(dataset, indices[n_train:n_train + n_val])
 
-    seed = int(config.get("project", {}).get("seed", 42))
-    generator = torch.Generator().manual_seed(seed)
+    train_subset = Subset(dataset, train_indices)
+    val_subset = Subset(dataset, val_indices)
+    batch_size = train_cfg.get("batch_size", 8)
+    num_workers = train_cfg.get("num_workers", 0)
+    if isinstance(batch_size, (bool, np.bool_)) or not isinstance(
+        batch_size, (int, np.integer)
+    ) or batch_size <= 0:
+        raise ValueError("training.batch_size must be a positive integer")
+    if isinstance(num_workers, (bool, np.bool_)) or not isinstance(
+        num_workers, (int, np.integer)
+    ) or num_workers < 0:
+        raise ValueError("training.num_workers must be a non-negative integer")
     common = {
-        "batch_size": int(train_cfg.get("batch_size", 8)),
-        "num_workers": int(train_cfg.get("num_workers", 0)),
+        "batch_size": int(batch_size),
+        "num_workers": int(num_workers),
         "worker_init_fn": _seed_worker,
         "pin_memory": bool(torch.cuda.is_available()),
     }
+    generator = torch.Generator().manual_seed(seed)
     train_loader = DataLoader(train_subset, shuffle=True, generator=generator, **common)
     val_loader = DataLoader(val_subset, shuffle=False, **common)
+    summary = {
+        "train_samples": len(buckets[0]),
+        "validation_samples": len(buckets[1]),
+        "test_samples": len(buckets[2]),
+        "grouped_split": group_map is not None,
+        **dataset.supervision_summary,
+    }
+    if grouped_indices is not None:
+        summary["source_group_count"] = len(grouped_indices)
+        summary["train_groups"] = len({
+            group_map[dataset.samples[index]["sample_id"]] for index in buckets[0]
+        })
+        summary["validation_groups"] = len({
+            group_map[dataset.samples[index]["sample_id"]] for index in buckets[1]
+        })
+    train_loader.split_summary = summary
+    val_loader.split_summary = summary.copy()
+    if summary["semantic_supervised_samples"] == 0:
+        import warnings
+        warnings.warn(
+            "No semantic masks are available; training will supervise only center heatmaps.",
+            UserWarning,
+            stacklevel=2,
+        )
     return train_loader, val_loader

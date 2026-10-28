@@ -42,19 +42,61 @@ NUM_SEMANTIC_CLASSES = 3  # 0 background / 1 soma / 2 visible process
 # Configuration and setup
 # --------------------------------------------------------------------------- #
 
-def load_config(config_path: str | Path = DEFAULT_CONFIG_PATH) -> dict:
-    """Load and minimally validate the YAML training configuration."""
-    path = Path(config_path)
-    if not path.is_file():
-        raise FileNotFoundError(f"Config file not found: {path}")
-    with path.open("r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
+def _strict_int(value, name: str, minimum: int = 0) -> int:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
+        raise ValueError(f"{name} must be an integer")
+    if value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")
+    return int(value)
+
+
+def _finite_number(value, name: str) -> float:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ) or not np.isfinite(value):
+        raise ValueError(f"{name} must be a finite number")
+    return float(value)
+
+
+def validate_config(config: dict) -> dict:
+    """Validate training values without truncating floats or coercing strings."""
     if not isinstance(config, dict):
         raise ValueError(f"Config must be a mapping, got {type(config).__name__}")
     for section in ("data", "model", "training"):
         if section not in config or not isinstance(config[section], dict):
             raise ValueError(f"Config is missing required section: {section!r}")
+    data_cfg, model_cfg, train_cfg = config["data"], config["model"], config["training"]
+    _strict_int(data_cfg.get("input_channels", 1), "data.input_channels", 1)
+    image_size = data_cfg.get("image_size", (512, 512))
+    if not isinstance(image_size, (tuple, list)) or len(image_size) != 2:
+        raise ValueError("data.image_size must contain (height, width)")
+    for index, value in enumerate(image_size):
+        _strict_int(value, f"data.image_size[{index}]", 1)
+    _strict_int(model_cfg.get("output_channels", 4), "model.output_channels", 1)
+    _strict_int(train_cfg.get("epochs", 50), "training.epochs", 1)
+    _strict_int(train_cfg.get("batch_size", 8), "training.batch_size", 1)
+    _strict_int(train_cfg.get("num_workers", 0), "training.num_workers", 0)
+    _strict_int(train_cfg.get("early_stopping_patience", 10), "training.early_stopping_patience", 1)
+    if _finite_number(train_cfg.get("learning_rate", 1e-4), "training.learning_rate") <= 0:
+        raise ValueError("training.learning_rate must be positive")
+    weights = [
+        _finite_number(train_cfg.get("semantic_weight", 1.0), "training.semantic_weight"),
+        _finite_number(train_cfg.get("center_weight", 1.0), "training.center_weight"),
+    ]
+    if any(weight < 0 for weight in weights) or not any(weight > 0 for weight in weights):
+        raise ValueError("Loss weights must be nonnegative and at least one must be positive")
+    _strict_int(config.get("project", {}).get("seed", 42), "project.seed", 0)
     return config
+
+
+def load_config(config_path: str | Path = DEFAULT_CONFIG_PATH) -> dict:
+    """Load and strictly validate the YAML training configuration."""
+    path = Path(config_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Config file not found: {path}")
+    with path.open("r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    return validate_config(config)
 
 
 def set_seed(seed: int = 42) -> None:
@@ -88,14 +130,13 @@ def build_model(config: dict) -> nn.Module:
     architecture = model_cfg.get("architecture", "unet")
     if architecture != "unet":
         raise ValueError(f"Unsupported architecture: {architecture!r}")
-    in_channels = int(config["data"].get("input_channels", 1))
-    if in_channels <= 0:
-        raise ValueError("data.input_channels must be positive")
+    in_channels = _strict_int(config["data"].get("input_channels", 1), "data.input_channels", 1)
     # FIX (review B5): catch a stale output_channels config value instead of
     # silently training against a mismatched output-head contract.
-    declared = model_cfg.get("output_channels")
+    declared = model_cfg.get("output_channels", 4)
+    declared = _strict_int(declared, "model.output_channels", 1)
     expected = NUM_SEMANTIC_CLASSES + 1  # 3 semantic classes + 1 center channel
-    if declared is not None and int(declared) != expected:
+    if declared != expected:
         raise ValueError(
             f"model.output_channels={declared} but the REDESIGN model emits "
             f"{expected} channels; update configs/config.yaml."
@@ -107,8 +148,8 @@ def build_model(config: dict) -> nn.Module:
 def build_optimizer(model: nn.Module, config: dict) -> torch.optim.Optimizer:
     """Create the optimizer from config (currently Adam)."""
     train_cfg = config["training"]
-    lr = float(train_cfg.get("learning_rate", 1e-4))
-    if not np.isfinite(lr) or lr <= 0:
+    lr = _finite_number(train_cfg.get("learning_rate", 1e-4), "training.learning_rate")
+    if lr <= 0:
         raise ValueError("training.learning_rate must be finite and positive")
     name = str(train_cfg.get("optimizer", "adam")).lower()
     if name != "adam":
@@ -142,20 +183,35 @@ class CompositeLoss(nn.Module):
     def forward(self, outputs: dict, targets: dict) -> dict:
         semantic_logits = outputs["semantic_logits"]
         center_logits = outputs["center_logits"]
-        semantic_mask = targets["semantic_mask"].long()
+        semantic_mask = targets["semantic_mask"]
         center_heatmap = targets["center_heatmap"].float()
         valid_mask = targets["valid_mask"].bool()
-        # IMPLEMENTED [Liu]: point-only samples supervise centers, not semantics.
         semantic_valid_mask = targets.get("semantic_valid_mask", valid_mask).bool()
 
         if semantic_logits.ndim != 4 or semantic_logits.shape[1] != NUM_SEMANTIC_CLASSES:
             raise ValueError(f"semantic_logits must be [B,{NUM_SEMANTIC_CLASSES},H,W]")
+        if center_logits.ndim != 4 or center_logits.shape[1] != 1:
+            raise ValueError("center_logits must be [B,1,H,W]")
+        if semantic_logits.shape[0] != center_logits.shape[0] or semantic_logits.shape[2:] != center_logits.shape[2:]:
+            raise ValueError("Semantic and center logits must have matching batch and spatial shapes")
         if semantic_mask.shape != semantic_logits.shape[:1] + semantic_logits.shape[2:]:
             raise ValueError("semantic_mask shape must match logits [B,H,W]")
+        if semantic_mask.dtype not in (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64):
+            raise ValueError("semantic_mask must contain integer labels")
+        semantic_mask = semantic_mask.long()
         if center_heatmap.shape != center_logits.shape:
             raise ValueError("center_heatmap must match center_logits [B,1,H,W]")
         if valid_mask.shape != semantic_mask.shape or semantic_valid_mask.shape != semantic_mask.shape:
             raise ValueError("valid masks must match semantic_mask [B,H,W]")
+        if not torch.isfinite(center_heatmap).all() or torch.any(center_heatmap < 0) or torch.any(center_heatmap > 1):
+            raise ValueError("center_heatmap must contain finite values in [0,1]")
+        # FIX [Liu]: semantic validity must also respect the shared valid_mask.
+        semantic_valid_mask = semantic_valid_mask & valid_mask
+        if semantic_valid_mask.any() and (
+            torch.any(semantic_mask[semantic_valid_mask] < 0)
+            or torch.any(semantic_mask[semantic_valid_mask] >= NUM_SEMANTIC_CLASSES)
+        ):
+            raise ValueError("semantic_mask labels must be 0, 1, or 2 on valid pixels")
 
         zero = (semantic_logits.sum() + center_logits.sum()) * 0.0
         n_center_valid = int(valid_mask.sum().item())
@@ -181,10 +237,14 @@ class CompositeLoss(nn.Module):
 
 def build_criterion(config: dict) -> CompositeLoss:
     """Build the loss from config; only bce_with_logits is currently supported."""
-    name = str(config["training"].get("loss", "bce_with_logits")).lower()
+    train_cfg = config["training"]
+    name = str(train_cfg.get("loss", "bce_with_logits")).lower()
     if name != "bce_with_logits":
         raise ValueError(f"Unsupported loss: {name!r}")
-    return CompositeLoss()
+    return CompositeLoss(
+        semantic_weight=_finite_number(train_cfg.get("semantic_weight", 1.0), "training.semantic_weight"),
+        center_weight=_finite_number(train_cfg.get("center_weight", 1.0), "training.center_weight"),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -274,9 +334,10 @@ def train(config: dict, device: torch.device, progress=print) -> dict:
     else:
         from dataset import build_dataloaders
 
+    validate_config(config)
     train_cfg = config["training"]
-    epochs = int(train_cfg.get("epochs", 50))
-    patience = int(train_cfg.get("early_stopping_patience", 10))
+    epochs = train_cfg.get("epochs", 50)
+    patience = train_cfg.get("early_stopping_patience", 10)
     checkpoint_dir = Path(train_cfg.get("checkpoint_dir", "checkpoints"))
     if not checkpoint_dir.is_absolute():
         checkpoint_dir = PROJECT_ROOT / checkpoint_dir
@@ -445,7 +506,7 @@ def main():
         if args.epochs <= 0:
             raise ValueError("--epochs must be positive")
         config["training"]["epochs"] = args.epochs
-    set_seed(int(config.get("project", {}).get("seed", 42)))
+    set_seed(config.get("project", {}).get("seed", 42))
     device = get_device(args.device)
     print(f"device: {device}")
 

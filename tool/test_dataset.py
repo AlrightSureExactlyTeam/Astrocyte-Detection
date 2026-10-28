@@ -5,11 +5,39 @@ from pathlib import Path
 
 import numpy as np
 import tifffile
+import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from dataset import AstrocyteDataset, build_dataloaders, points_to_heatmap, read_point_annotations
+
+
+class MaskGeometryTransform:
+    def __init__(self, operation):
+        self.operation = operation
+
+    def transform_with_masks(self, image, points, semantic, instance):
+        height, width = image.shape[-2:]
+        points = points.copy()
+        if self.operation == "horizontal":
+            image = torch.flip(image, dims=(2,))
+            semantic, instance = np.fliplr(semantic), np.fliplr(instance)
+            points[:, 0] = width - 1 - points[:, 0]
+        elif self.operation == "vertical":
+            image = torch.flip(image, dims=(1,))
+            semantic, instance = np.flipud(semantic), np.flipud(instance)
+            points[:, 1] = height - 1 - points[:, 1]
+        elif self.operation == "rotation":
+            image = torch.rot90(image, k=1, dims=(1, 2))
+            semantic, instance = np.rot90(semantic), np.rot90(instance)
+            points[:] = points[:, [1, 0]]
+            points[:, 1] = width - 1 - points[:, 1]
+        elif self.operation == "crop":
+            image = image[:, 1:3, 1:5]
+            semantic, instance = semantic[1:3, 1:5], instance[1:3, 1:5]
+            points -= np.array([1, 1])
+        return image, points, semantic.copy(), instance.copy()
 
 
 class TestAnnotationsAndHeatmaps(unittest.TestCase):
@@ -88,6 +116,55 @@ class TestAstrocyteDataset(unittest.TestCase):
             )
             self.assertEqual(peak, (2, 3))  # Original center (6,4) -> resized (3,2).
 
+    def test_mask_aware_geometric_transforms_keep_all_targets_aligned(self):
+        expected = {
+            "horizontal": ((4, 6), (2, 4)),
+            "vertical": ((4, 6), (1, 1)),
+            "rotation": ((6, 4), (4, 2)),
+            "crop": ((2, 4), (1, 0)),
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for name in ("images", "positions", "semantic", "instances"):
+                (root / name).mkdir()
+            image = np.arange(24, dtype=np.uint8).reshape(4, 6)
+            semantic = np.zeros((4, 6), dtype=np.uint8)
+            instance = np.zeros((4, 6), dtype=np.uint32)
+            semantic[2, 1], instance[2, 1] = 1, 7
+            tifffile.imwrite(root / "images" / "sample.tif", image)
+            tifffile.imwrite(root / "semantic" / "sample.tif", semantic)
+            tifffile.imwrite(root / "instances" / "sample.tif", instance)
+            (root / "positions" / "sample.txt").write_text("1,2\n", encoding="utf-8")
+            for operation, (shape, expected_peak) in expected.items():
+                with self.subTest(operation=operation):
+                    dataset = AstrocyteDataset(
+                        root / "images", root / "positions", image_size=(4, 6), sigma=1.0,
+                        transform=MaskGeometryTransform(operation),
+                        semantic_mask_dir=root / "semantic", instance_mask_dir=root / "instances",
+                    )
+                    _, targets, metadata = dataset[0]
+                    heatmap = targets["center_heatmap"].numpy()[0]
+                    peak = np.unravel_index(heatmap.argmax(), heatmap.shape)
+                    self.assertEqual(metadata["image_size"], shape)
+                    self.assertEqual(peak, expected_peak)
+                    self.assertEqual(targets["semantic_mask"].numpy()[peak], 1)
+                    self.assertEqual(targets["instance_mask"].numpy()[peak], 7)
+
+    def test_legacy_transform_is_rejected_when_masks_exist(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for name in ("images", "positions", "semantic"):
+                (root / name).mkdir()
+            tifffile.imwrite(root / "images" / "1.tif", np.zeros((4, 6), dtype=np.uint8))
+            tifffile.imwrite(root / "semantic" / "1.tif", np.zeros((4, 6), dtype=np.uint8))
+            (root / "positions" / "1.txt").write_text("1,2\n", encoding="utf-8")
+            dataset = AstrocyteDataset(
+                root / "images", root / "positions", image_size=(4, 6),
+                transform=lambda image, points: (image, points), semantic_mask_dir=root / "semantic",
+            )
+            with self.assertRaisesRegex(ValueError, "transform_with_masks"):
+                dataset[0]
+
     def test_point_only_sample_disables_semantic_supervision(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -165,6 +242,44 @@ class TestAstrocyteDataset(unittest.TestCase):
             images, targets, _ = next(iter(train_loader))
             self.assertEqual(images.shape, (2, 1, 16, 16))
             self.assertEqual(targets["center_heatmap"].shape, (2, 1, 16, 16))
+
+    def test_explicit_group_split_is_reproducible_and_leakage_free(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "images").mkdir()
+            (root / "positions").mkdir()
+            groups = {}
+            for group in range(3):
+                for suffix in ("a", "b"):
+                    sample_id = f"slide{group}_{suffix}"
+                    groups[sample_id] = f"slide{group}"
+                    tifffile.imwrite(
+                        root / "images" / f"{sample_id}.tif", np.zeros((8, 8), dtype=np.uint8)
+                    )
+                    (root / "positions" / f"{sample_id}.txt").write_text("", encoding="utf-8")
+            config = {
+                "project": {"seed": 42},
+                "data": {
+                    "images_dir": str(root / "images"), "annotations_dir": str(root / "positions"),
+                    "input_channels": 1, "image_size": [8, 8], "groups": groups,
+                    "train_fraction": 0.34, "val_fraction": 0.33, "test_fraction": 0.33,
+                },
+                "training": {"batch_size": 1, "num_workers": 0},
+            }
+            with self.assertWarns(UserWarning):
+                train_loader, val_loader = build_dataloaders(config)
+            train_indices = list(train_loader.dataset.indices)
+            val_indices = list(val_loader.dataset.indices)
+            train_groups = {groups[train_loader.dataset.dataset.samples[i]["sample_id"]] for i in train_indices}
+            val_groups = {groups[val_loader.dataset.dataset.samples[i]["sample_id"]] for i in val_indices}
+            self.assertTrue(train_groups.isdisjoint(val_groups))
+            self.assertEqual(train_loader.split_summary["source_group_count"], 3)
+            with self.assertWarns(UserWarning):
+                repeated_train, _ = build_dataloaders(config)
+            self.assertEqual(list(repeated_train.dataset.indices), train_indices)
+            config["data"]["groups"] = {sample_id: "one_slide" for sample_id in groups}
+            with self.assertRaises(ValueError):
+                build_dataloaders(config)
 
 
 if __name__ == "__main__":

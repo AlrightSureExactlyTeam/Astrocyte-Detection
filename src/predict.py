@@ -10,7 +10,6 @@ import numpy as np
 import tifffile
 import torch
 import yaml
-from scipy.spatial.distance import cdist
 
 if __package__:
     from .model import create_model
@@ -169,6 +168,87 @@ def predict_image(
     return result
 
 
+def _deduplicate_global_detections(detections, tile_bounds, max_distance):
+    """Merge cross-tile duplicates with spatial hashing and overlap checks."""
+    if not detections:
+        return np.empty((0, 2), dtype=np.float64), [], {}
+    parent = list(range(len(detections)))
+
+    def find(index):
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(first, second):
+        first_root, second_root = find(first), find(second)
+        if first_root != second_root:
+            parent[max(first_root, second_root)] = min(first_root, second_root)
+
+    def relevant_pair(first, second):
+        a, b = detections[first], detections[second]
+        if a["tile_id"] == b["tile_id"]:
+            return False
+        ax0, ay0, ax1, ay1 = tile_bounds[a["tile_id"]]
+        bx0, by0, bx1, by1 = tile_bounds[b["tile_id"]]
+        x0, y0 = max(ax0, bx0), max(ay0, by0)
+        x1, y1 = min(ax1, bx1), min(ay1, by1)
+        if x1 <= x0 or y1 <= y0:
+            return False
+        # Both detections must lie in the shared tile region (within tolerance).
+        return all(
+            x0 - max_distance <= point["x"] <= x1 + max_distance
+            and y0 - max_distance <= point["y"] <= y1 + max_distance
+            for point in (a, b)
+        )
+
+    grid = {}
+    exact_locations = {}
+    cell_size = max(float(max_distance), 1.0)
+    for index, point in enumerate(detections):
+        candidates = set()
+        if max_distance == 0:
+            candidates.update(exact_locations.get((point["x"], point["y"]), []))
+        else:
+            grid_x, grid_y = int(np.floor(point["x"] / cell_size)), int(np.floor(point["y"] / cell_size))
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    candidates.update(grid.get((grid_x + dx, grid_y + dy), []))
+        for other in candidates:
+            if not relevant_pair(index, other):
+                continue
+            distance = np.hypot(point["x"] - detections[other]["x"], point["y"] - detections[other]["y"])
+            if distance <= max_distance:
+                union(index, other)
+        if max_distance == 0:
+            exact_locations.setdefault((point["x"], point["y"]), []).append(index)
+        else:
+            grid.setdefault((grid_x, grid_y), []).append(index)
+
+    components = {}
+    for index in range(len(detections)):
+        components.setdefault(find(index), []).append(index)
+    ordered = []
+    for members in components.values():
+        representative = min(
+            members,
+            key=lambda i: (
+                detections[i]["y"], detections[i]["x"], detections[i]["tile_id"], i
+            ),
+        )
+        ordered.append((representative, members))
+    ordered.sort(key=lambda item: (
+        detections[item[0]]["y"], detections[item[0]]["x"], detections[item[0]]["tile_id"]
+    ))
+    points, sources, accepted_by_tile = [], [], {tile_id: 0 for tile_id in tile_bounds}
+    for representative, members in ordered:
+        point = detections[representative]
+        points.append((point["x"], point["y"]))
+        sources.append(sorted({detections[index]["tile_id"] for index in members}))
+        accepted_by_tile[point["tile_id"]] += 1
+    return np.asarray(points, dtype=np.float64).reshape(-1, 2), sources, accepted_by_tile
+
+
 def predict_whole_slide(
     slide_path: str,
     checkpoint_path: str,
@@ -177,10 +257,11 @@ def predict_whole_slide(
     model=None,
     output_dir: str | None = None,
 ):
-    """Predict a slide tile-by-tile and deduplicate centers in overlap bands.
+    """Predict tiles and deduplicate raw centers only in geometric overlaps.
 
-    Coordinates are reported in the selected level's pixel grid. Full-slide
-    masks are not materialized; optional per-tile masks retain tile provenance.
+    Coordinates use the selected level's grid. Extremely close real cells in an
+    overlap remain ambiguous; distance alone cannot prove biological identity.
+    Full-slide masks are not materialized and cross-tile instances are not stitched.
     """
     if model is None:
         model = load_trained_model(checkpoint_path, config, device)
@@ -197,7 +278,8 @@ def predict_whole_slide(
     tile_output = Path(output_dir) / "tiles" if output_dir is not None else None
     if tile_output is not None:
         tile_output.mkdir(parents=True, exist_ok=True)
-    accepted = []
+    detections = []
+    tile_bounds = {}
     tile_records = []
     next_instance_id = 1
     for item in iter_qptiff_tiles(
@@ -209,50 +291,66 @@ def predict_whole_slide(
         series_index=series_index,
         with_meta=True,
     ):
+        tile_id = str(item["tile_id"])
+        if tile_id in tile_bounds:
+            raise ValueError(f"Duplicate tile ID: {tile_id}")
         prediction = _predict_array(model, item["tile"], config, device)
         global_points = centers_to_global_coordinates(
             prediction["points"], tile_offset=(item["x"], item["y"])
         )
-        kept = []
-        if len(global_points):
-            if accepted and dedup_distance >= 0:
-                distances = cdist(global_points, np.asarray(accepted)).min(axis=1)
-                keep_indices = np.flatnonzero(distances > dedup_distance)
-            else:
-                keep_indices = np.arange(len(global_points))
-            kept = global_points[keep_indices]
-            accepted.extend(kept.tolist())
+        tile_height, tile_width = item["tile"].shape[:2]
+        tile_bounds[tile_id] = (
+            float(item["x"]), float(item["y"]),
+            float(item["x"] + tile_width), float(item["y"] + tile_height),
+        )
+        seen_within_tile = set()
+        for x, y in global_points:
+            location = (float(x), float(y))
+            if location in seen_within_tile:
+                continue
+            seen_within_tile.add(location)
+            detections.append({"x": location[0], "y": location[1], "tile_id": tile_id})
 
         instance_mask = prediction["instance_mask"]
-        if instance_mask.max() > 0:
-            remapped = np.zeros_like(instance_mask)
-            for local_id in np.unique(instance_mask):
-                if local_id == 0:
-                    continue
-                remapped[instance_mask == local_id] = next_instance_id
-                next_instance_id += 1
-            instance_mask = remapped
+        remapped = np.zeros_like(instance_mask, dtype=np.uint32)
+        instance_id_map = {}
+        for local_id in np.unique(instance_mask):
+            if local_id == 0:
+                continue
+            if next_instance_id > np.iinfo(np.uint32).max:
+                raise ValueError("Global instance ID exceeds uint32 range")
+            instance_id_map[str(int(local_id))] = int(next_instance_id)
+            remapped[instance_mask == local_id] = next_instance_id
+            next_instance_id += 1
         if tile_output is not None:
-            stem = f"{item['tile_id']}_level{level}"
+            stem = f"{tile_id}_level{level}"
             tifffile.imwrite(tile_output / f"{stem}_semantic.tif", prediction["semantic_mask"])
-            tifffile.imwrite(tile_output / f"{stem}_instance.tif", instance_mask.astype(np.uint32))
+            tifffile.imwrite(tile_output / f"{stem}_instance.tif", remapped)
         tile_records.append({
-            "tile_id": item["tile_id"],
+            "tile_id": tile_id,
             "x": item["x"],
             "y": item["y"],
+            "width": tile_width,
+            "height": tile_height,
             "raw_peak_count": prediction["raw_peak_count"],
             "assigned_count": int(len(prediction["assigned_points"])),
             "instance_count": prediction["instance_count"],
-            "accepted_after_dedup": int(len(kept)),
+            "instance_id_map": instance_id_map,
+            "accepted_after_dedup": 0,
             "level": level,
             "series_index": series_index,
             "channel": channel,
             "scale_xy": item["scale_xy"],
         })
 
-    points = np.asarray(accepted, dtype=np.float64).reshape(-1, 2)
+    points, point_sources, accepted_by_tile = _deduplicate_global_detections(
+        detections, tile_bounds, dedup_distance
+    )
+    for record in tile_records:
+        record["accepted_after_dedup"] = accepted_by_tile.get(record["tile_id"], 0)
     return {
         "points": points,
+        "point_sources": point_sources,
         "count": int(len(points)),
         "tiles": tile_records,
         "metadata": {
@@ -265,6 +363,8 @@ def predict_whole_slide(
             "tile_size": tile_size,
             "overlap": overlap,
             "dedup_distance_pixels": dedup_distance,
+            "dedup_policy": "exact within-tile duplicates; distance only between geometrically overlapping tiles",
+            "instance_id_policy": "globally unique per tile-local instance; cross-tile instances are not stitched",
         },
     }
 
@@ -291,71 +391,104 @@ def save_predictions(
     instance_mask: np.ndarray | None = None,
     metadata: dict | None = None,
 ):
-    """Save center CSV, count, overlay, and optional lossless label masks."""
+    """Validate all outputs, then atomically publish CSV, masks, and overlay."""
     points = np.asarray(points, dtype=np.float64)
     if points.size == 0:
         points = np.empty((0, 2), dtype=np.float64)
     if points.ndim != 2 or points.shape[1] != 2 or not np.isfinite(points).all():
         raise ValueError("points must be a finite (N,2) array")
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if output_dir is None or not str(output_dir).strip():
+        raise ValueError("output_dir must not be empty")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise ValueError("metadata must be a dictionary")
 
-    with (out_dir / "centers.csv").open("w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["cell_id", "x", "y", "soma_area", "process_area", "status"])
-        for index, (x, y) in enumerate(points, start=1):
-            soma_area = process_area = ""
-            status = "center_only"
-            if instance_mask is not None and semantic_mask is not None:
-                col, row = int(round(x)), int(round(y))
-                if 0 <= row < instance_mask.shape[0] and 0 <= col < instance_mask.shape[1]:
-                    instance_id = int(instance_mask[row, col])
-                    if instance_id > 0:
-                        selected = instance_mask == instance_id
-                        soma_area = int(np.count_nonzero(selected & (semantic_mask == 1)))
-                        process_area = int(np.count_nonzero(selected & (semantic_mask == 2)))
-                        status = "assigned"
-                    else:
-                        status = "unassigned"
-            writer.writerow([index, float(x), float(y), soma_area, process_area, status])
-
-    summary = {"count": int(len(points)), "metadata": _json_value(metadata or {})}
-    (out_dir / "summary.json").write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    if semantic_mask is not None:
-        semantic_mask = np.asarray(semantic_mask)
-        if semantic_mask.ndim != 2 or np.any(semantic_mask < 0) or np.any(semantic_mask > 2):
-            raise ValueError("semantic_mask must be a 2D label map with values 0, 1, 2")
-        tifffile.imwrite(out_dir / "semantic_mask.tif", semantic_mask.astype(np.uint8))
-    if instance_mask is not None:
-        instance_mask = np.asarray(instance_mask)
-        if instance_mask.ndim != 2 or np.any(instance_mask < 0):
-            raise ValueError("instance_mask must be a non-negative 2D label map")
-        if instance_mask.size and instance_mask.max() > np.iinfo(np.uint32).max:
-            raise ValueError("Instance ID exceeds uint32 range")
-        tifffile.imwrite(out_dir / "instance_mask.tif", instance_mask.astype(np.uint32))
-
+    gray = None
     if image is not None:
         gray = prepare_image(image).squeeze(0).numpy()
-        overlay = cv2.cvtColor((gray * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+        out_of_bounds = (
+            (points[:, 0] < 0) | (points[:, 0] >= gray.shape[1])
+            | (points[:, 1] < 0) | (points[:, 1] >= gray.shape[0])
+        )
+        if np.any(out_of_bounds):
+            raise ValueError("points must lie inside the supplied image")
+    if semantic_mask is not None:
+        semantic_mask = np.asarray(semantic_mask)
+        if (
+            semantic_mask.ndim != 2 or semantic_mask.size == 0
+            or not np.issubdtype(semantic_mask.dtype, np.integer)
+            or np.any(semantic_mask < 0) or np.any(semantic_mask > 2)
+        ):
+            raise ValueError("semantic_mask must be a non-empty 2D integer label map with values 0, 1, 2")
+        if gray is not None and semantic_mask.shape != gray.shape:
+            raise ValueError("semantic_mask shape must match the image")
+    if instance_mask is not None:
+        instance_mask = np.asarray(instance_mask)
+        if (
+            instance_mask.ndim != 2 or instance_mask.size == 0
+            or not np.issubdtype(instance_mask.dtype, np.integer)
+            or np.any(instance_mask < 0)
+        ):
+            raise ValueError("instance_mask must be a non-empty non-negative 2D integer label map")
+        if instance_mask.size and instance_mask.max() > np.iinfo(np.uint32).max:
+            raise ValueError("Instance ID exceeds uint32 range")
+        if gray is not None and instance_mask.shape != gray.shape:
+            raise ValueError("instance_mask shape must match the image")
+    if semantic_mask is not None and instance_mask is not None and semantic_mask.shape != instance_mask.shape:
+        raise ValueError("semantic_mask and instance_mask shapes must match")
+    summary_json = json.dumps(
+        {"count": int(len(points)), "metadata": _json_value(metadata or {})},
+        indent=2,
+        ensure_ascii=False,
+    )
+
+    # FIX [Liu]: invalid inputs and rendering failures cannot leave partial finals.
+    import tempfile
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".predictions_", dir=out_dir) as temp_dir:
+        staging = Path(temp_dir)
+        with (staging / "centers.csv").open("w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["cell_id", "x", "y", "soma_area", "process_area", "status"])
+            for index, (x, y) in enumerate(points, start=1):
+                soma_area = process_area = ""
+                status = "center_only"
+                if instance_mask is not None and semantic_mask is not None:
+                    col, row = int(round(x)), int(round(y))
+                    if 0 <= row < instance_mask.shape[0] and 0 <= col < instance_mask.shape[1]:
+                        instance_id = int(instance_mask[row, col])
+                        if instance_id > 0:
+                            selected = instance_mask == instance_id
+                            soma_area = int(np.count_nonzero(selected & (semantic_mask == 1)))
+                            process_area = int(np.count_nonzero(selected & (semantic_mask == 2)))
+                            status = "assigned"
+                        else:
+                            status = "unassigned"
+                writer.writerow([index, float(x), float(y), soma_area, process_area, status])
+        (staging / "summary.json").write_text(summary_json, encoding="utf-8")
+        if semantic_mask is not None:
+            tifffile.imwrite(staging / "semantic_mask.tif", semantic_mask.astype(np.uint8))
         if instance_mask is not None:
-            if instance_mask.shape != gray.shape:
-                raise ValueError("instance_mask shape must match the image")
-            boundaries = np.zeros(gray.shape, dtype=bool)
-            boundaries[:-1, :] |= instance_mask[:-1, :] != instance_mask[1:, :]
-            boundaries[:, :-1] |= instance_mask[:, :-1] != instance_mask[:, 1:]
-            overlay[boundaries] = (0, 255, 255)
-        for index, (x, y) in enumerate(points, start=1):
-            col, row = int(round(x)), int(round(y))
-            if 0 <= col < overlay.shape[1] and 0 <= row < overlay.shape[0]:
-                cv2.circle(overlay, (col, row), 3, (0, 0, 255), -1)
-                cv2.putText(
-                    overlay, str(index), (col + 4, max(10, row - 4)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1, cv2.LINE_AA
-                )
-        if not cv2.imwrite(str(out_dir / "overlay.png"), overlay):
-            raise OSError(f"Could not save overlay to {out_dir}")
+            tifffile.imwrite(staging / "instance_mask.tif", instance_mask.astype(np.uint32))
+        if gray is not None:
+            overlay = cv2.cvtColor((gray * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+            if instance_mask is not None:
+                boundaries = np.zeros(gray.shape, dtype=bool)
+                boundaries[:-1, :] |= instance_mask[:-1, :] != instance_mask[1:, :]
+                boundaries[:, :-1] |= instance_mask[:, :-1] != instance_mask[:, 1:]
+                overlay[boundaries] = (0, 255, 255)
+            for index, (x, y) in enumerate(points, start=1):
+                col, row = int(round(x)), int(round(y))
+                if 0 <= col < overlay.shape[1] and 0 <= row < overlay.shape[0]:
+                    cv2.circle(overlay, (col, row), 3, (0, 0, 255), -1)
+                    cv2.putText(
+                        overlay, str(index), (col + 4, max(10, row - 4)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1, cv2.LINE_AA
+                    )
+            if not cv2.imwrite(str(staging / "overlay.png"), overlay):
+                raise OSError(f"Could not save overlay to {out_dir}")
+        for temporary in staging.iterdir():
+            temporary.replace(out_dir / temporary.name)
     return str(out_dir)
 
 

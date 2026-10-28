@@ -161,6 +161,16 @@ class TestMetrics(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     counting_metrics(pred, gt)
 
+    def test_counting_rmse_avoids_overflow(self):
+        result = counting_metrics([1e200], [0])
+        self.assertEqual(result, {"mae": 1e200, "rmse": 1e200})
+
+    def test_excessive_dense_matching_is_rejected_before_allocation(self):
+        pred = np.zeros((5001, 2))
+        gt = np.zeros((5001, 2))
+        with self.assertRaisesRegex(ValueError, "too large"):
+            match_points(pred, gt, max_distance=1)
+
 
 class TestExportReport(unittest.TestCase):
     def setUp(self):

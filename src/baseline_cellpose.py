@@ -28,6 +28,22 @@ def run_cellpose(
     max_size_fraction: float = 0.4,
 ) -> np.ndarray:
     """Run Cellpose-SAM on one image and return a 2D instance label mask."""
+    if diameter is not None and (
+        isinstance(diameter, (bool, np.bool_))
+        or not isinstance(diameter, (int, float, np.integer, np.floating))
+        or not np.isfinite(diameter) or diameter <= 0
+    ):
+        raise ValueError("diameter must be finite and positive, or None")
+    if isinstance(min_size, (bool, np.bool_)) or not isinstance(
+        min_size, (int, np.integer)
+    ) or min_size <= 0:
+        raise ValueError("min_size must be a positive integer")
+    if (
+        isinstance(max_size_fraction, (bool, np.bool_))
+        or not isinstance(max_size_fraction, (int, float, np.integer, np.floating))
+        or not np.isfinite(max_size_fraction) or not 0 < max_size_fraction <= 1
+    ):
+        raise ValueError("max_size_fraction must be in (0,1]")
     from cellpose import models
 
     gray = prepare_image(image, channel=channel).squeeze(0).numpy()
@@ -74,16 +90,27 @@ def mask_centers(masks: np.ndarray) -> list[tuple[int, int, int]]:
         raise ValueError("masks must contain finite numeric labels")
     if np.any(masks < 0) or np.any(masks != np.floor(masks)):
         raise ValueError("masks must contain non-negative integer labels")
+    if masks.max() > np.iinfo(np.uint32).max:
+        raise ValueError("Instance ID exceeds uint32 range")
     centers = []
-    for region in regionprops(masks.astype(np.int32)):
+    # FIX [Liu]: compact labels avoid allocations proportional to the largest ID.
+    original_labels, compact = np.unique(masks, return_inverse=True)
+    compact = compact.reshape(masks.shape).astype(np.int32)
+    for region in regionprops(compact):
         cy, cx = region.centroid
-        centers.append((int(region.label), int(round(cx)), int(round(cy))))
+        original_id = int(original_labels[region.label])
+        centers.append((original_id, int(round(cx)), int(round(cy))))
     return centers
 
 
-def save_results(image: np.ndarray, centers: list[tuple[int, int, int]], out_dir: Path) -> None:
+def save_results(
+    image: np.ndarray,
+    centers: list[tuple[int, int, int]],
+    out_dir: Path,
+    channel: int | None = None,
+) -> None:
     # FIX: Validate image/coordinates before writing any partial output files.
-    gray = prepare_image(image).squeeze(0).numpy()
+    gray = prepare_image(image, channel=channel).squeeze(0).numpy()
     if centers is None:
         raise ValueError("centers must not be None")
     for row in centers:
@@ -149,7 +176,7 @@ def main():
     masks = masks.astype(np.uint32, copy=False)
     centers = mask_centers(masks)
 
-    save_results(image, centers, Path(args.out))
+    save_results(image, centers, Path(args.out), channel=args.channel)
 
     mask_path = Path(args.out) / "cellpose_instance_mask.tif"
     tifffile.imwrite(str(mask_path), masks)

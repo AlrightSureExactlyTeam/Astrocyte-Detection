@@ -180,6 +180,65 @@ class TestPredict(unittest.TestCase):
         self.assertEqual(result["tiles"][0]["instance_count"], 0)
         self.assertEqual(result["tiles"][0]["accepted_after_dedup"], 1)
 
+    def test_global_dedup_uses_overlap_provenance_and_deterministic_representatives(self):
+        bounds = {"a": (0, 0, 20, 20), "b": (10, 0, 30, 20), "c": (15, 0, 35, 20)}
+        detections = [
+            {"x": 16.0, "y": 5.0, "tile_id": "c"},
+            {"x": 15.0, "y": 5.0, "tile_id": "a"},
+            {"x": 15.5, "y": 5.0, "tile_id": "b"},
+        ]
+        points, sources, accepted = predict._deduplicate_global_detections(detections, bounds, 2.0)
+        np.testing.assert_array_equal(points, [[15.0, 5.0]])
+        self.assertEqual(sources, [["a", "b", "c"]])
+        self.assertEqual(accepted, {"a": 1, "b": 0, "c": 0})
+        reversed_points, reversed_sources, _ = predict._deduplicate_global_detections(
+            list(reversed(detections)), bounds, 2.0
+        )
+        np.testing.assert_array_equal(reversed_points, points)
+        self.assertEqual(reversed_sources, sources)
+
+        separate_bounds = {"a": (0, 0, 10, 10), "b": (12, 0, 22, 10)}
+        nearby = [
+            {"x": 9.9, "y": 5.0, "tile_id": "a"},
+            {"x": 12.1, "y": 5.0, "tile_id": "b"},
+        ]
+        distinct, _, _ = predict._deduplicate_global_detections(nearby, separate_bounds, 5.0)
+        self.assertEqual(len(distinct), 2)
+
+    def test_whole_slide_deduplicates_only_exact_within_tile_points(self):
+        tile = np.zeros((16, 16), dtype=np.uint8)
+        items = [{"tile": tile, "x": 0, "y": 0, "tile_id": "tile", "scale_xy": (1, 1)}]
+        prediction = {
+            "points": np.array([[5.0, 5.0], [5.0, 5.0], [5.5, 5.0]]),
+            "assigned_points": np.empty((0, 2)), "count": 3, "raw_peak_count": 3,
+            "instance_count": 0, "semantic_mask": np.zeros((16, 16), dtype=np.uint8),
+            "instance_mask": np.zeros((16, 16), dtype=np.uint32),
+        }
+        with (
+            patch.object(predict, "iter_qptiff_tiles", return_value=iter(items)),
+            patch.object(predict, "_predict_array", return_value=prediction),
+        ):
+            result = predict.predict_whole_slide(
+                "slide.qptiff", "unused.pt", test_config(), device="cpu", model=DummyModel()
+            )
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["point_sources"], [["tile"], ["tile"]])
+
+    def test_invalid_prediction_outputs_do_not_create_final_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "results"
+            with self.assertRaises(ValueError):
+                predict.save_predictions(
+                    np.array([[2.0, 2.0]]), np.zeros((8, 8), dtype=np.uint8), output,
+                    semantic_mask=np.zeros((4, 4), dtype=np.uint8),
+                )
+            self.assertFalse(output.exists())
+            with self.assertRaises(ValueError):
+                predict.save_predictions(
+                    np.array([[8.0, 2.0]]), np.zeros((8, 8), dtype=np.uint8), output,
+                )
+            self.assertFalse(output.exists())
+
     def test_save_predictions_accepts_verified_empty_points(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             predict.save_predictions(np.empty((0, 2)), None, temp_dir)

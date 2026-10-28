@@ -31,7 +31,10 @@ class TestCenterPostprocessing(unittest.TestCase):
         self.assertEqual(extract_centers(probability, threshold=0.95).shape, (0, 2))
 
     def test_extract_centers_rejects_invalid_input(self):
-        for probability in (None, np.zeros(3), np.full((3, 3), np.nan)):
+        for probability in (
+            None, np.zeros(3), np.empty((0, 3)), np.empty((3, 0)),
+            np.full((3, 3), np.nan),
+        ):
             with self.subTest(probability=probability):
                 with self.assertRaises(ValueError):
                     extract_centers(probability)
@@ -69,6 +72,9 @@ class TestSemanticAndInstances(unittest.TestCase):
         instances, assigned = separate_instances(semantic, [[2, 2], [100, 100]])
         self.assertEqual(assigned.shape, (0, 2))
         self.assertTrue(np.all(instances == 0))
+        empty_instances, empty_assigned = separate_instances(semantic, np.empty((0, 2)))
+        self.assertEqual(empty_assigned.shape, (0, 2))
+        self.assertTrue(np.all(empty_instances == 0))
 
 
 if __name__ == "__main__":

@@ -130,10 +130,14 @@ def _predict_array(model, image: np.ndarray, config: dict, device: str) -> dict:
     semantic_mask = _semantic_from_probability(
         probabilities["semantic_prob"], inference_cfg.get("semantic_confidence_threshold")
     )
-    instance_mask, points = separate_instances(semantic_mask, raw_points)
+    # FIX [Liu]: center detections and counts must not depend on semantic assignment.
+    instance_mask, assigned_points = separate_instances(semantic_mask, raw_points)
+    instance_count = int(np.count_nonzero(np.unique(instance_mask)))
     return {
-        "points": points,
-        "count": int(len(points)),
+        "points": raw_points,
+        "assigned_points": assigned_points,
+        "count": int(len(raw_points)),
+        "instance_count": instance_count,
         "center_prob": probabilities["center_prob"],
         "semantic_prob": probabilities["semantic_prob"],
         "semantic_mask": semantic_mask,
@@ -237,7 +241,8 @@ def predict_whole_slide(
             "x": item["x"],
             "y": item["y"],
             "raw_peak_count": prediction["raw_peak_count"],
-            "assigned_count": prediction["count"],
+            "assigned_count": int(len(prediction["assigned_points"])),
+            "instance_count": prediction["instance_count"],
             "accepted_after_dedup": int(len(kept)),
             "level": level,
             "series_index": series_index,

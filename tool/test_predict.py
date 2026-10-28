@@ -54,6 +54,23 @@ class TestPredict(unittest.TestCase):
         np.testing.assert_allclose(result["semantic_prob"].sum(axis=0), 1.0, atol=1e-6)
         self.assertGreater(result["center_prob"][8, 10], 0.99)
 
+    def test_background_semantics_do_not_remove_center(self):
+        image = np.zeros((32, 40), dtype=np.uint8)
+        center_prob = np.zeros((32, 40), dtype=np.float32)
+        center_prob[16, 20] = 0.99
+        semantic_prob = np.zeros((3, 32, 40), dtype=np.float32)
+        semantic_prob[0] = 1.0
+        probabilities = {"semantic_prob": semantic_prob, "center_prob": center_prob}
+        with patch.object(predict, "predict_heatmap", return_value=probabilities):
+            result = predict._predict_array(DummyModel(), image, test_config(), "cpu")
+
+        np.testing.assert_array_equal(result["points"], [[20, 16]])
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["raw_peak_count"], 1)
+        self.assertEqual(result["assigned_points"].shape, (0, 2))
+        self.assertEqual(result["instance_count"], 0)
+        self.assertTrue(np.all(result["instance_mask"] == 0))
+
     def test_checkpoint_schema_and_strict_loading(self):
         config = test_config()
         model = Mock()
@@ -89,6 +106,8 @@ class TestPredict(unittest.TestCase):
             )
             self.assertEqual(result["count"], 1)
             np.testing.assert_array_equal(result["points"], [[20, 16]])
+            np.testing.assert_array_equal(result["assigned_points"], [[20, 16]])
+            self.assertEqual(result["instance_count"], 1)
 
             predict.save_predictions(
                 result["points"], image, root / "results",
@@ -113,7 +132,9 @@ class TestPredict(unittest.TestCase):
              "series_index": 0, "channel": None, "scale_xy": (1.0, 1.0)},
         ]
         prediction = {
-            "points": np.array([[5.0, 5.0]]), "count": 1, "raw_peak_count": 1,
+            "points": np.array([[5.0, 5.0]]),
+            "assigned_points": np.array([[5.0, 5.0]]),
+            "count": 1, "raw_peak_count": 1, "instance_count": 1,
             "semantic_mask": np.ones((16, 16), dtype=np.uint8),
             "instance_mask": np.ones((16, 16), dtype=np.uint32),
         }
@@ -129,13 +150,46 @@ class TestPredict(unittest.TestCase):
             self.assertEqual(result["count"], 1)
             np.testing.assert_array_equal(result["points"], [[5.0, 5.0]])
             self.assertEqual([r["accepted_after_dedup"] for r in result["tiles"]], [1, 0])
+            self.assertEqual([r["assigned_count"] for r in result["tiles"]], [1, 1])
             self.assertEqual(len(list((Path(temp_dir) / "tiles").glob("*.tif"))), 4)
+
+    def test_whole_slide_keeps_raw_centers_when_assignment_fails(self):
+        tile = np.zeros((16, 16), dtype=np.uint8)
+        items = [
+            {"tile": tile, "x": 0, "y": 0, "tile_id": "r0_c0", "level": 0,
+             "series_index": 0, "channel": None, "scale_xy": (1.0, 1.0)},
+        ]
+        prediction = {
+            "points": np.array([[5.0, 5.0]]),
+            "assigned_points": np.empty((0, 2)),
+            "count": 1, "raw_peak_count": 1, "instance_count": 0,
+            "semantic_mask": np.zeros((16, 16), dtype=np.uint8),
+            "instance_mask": np.zeros((16, 16), dtype=np.uint32),
+        }
+        with (
+            patch.object(predict, "iter_qptiff_tiles", return_value=iter(items)),
+            patch.object(predict, "_predict_array", return_value=prediction),
+        ):
+            result = predict.predict_whole_slide(
+                "slide.qptiff", "unused.pt", test_config(), device="cpu", model=DummyModel()
+            )
+
+        self.assertEqual(result["count"], 1)
+        np.testing.assert_array_equal(result["points"], [[5.0, 5.0]])
+        self.assertEqual(result["tiles"][0]["assigned_count"], 0)
+        self.assertEqual(result["tiles"][0]["instance_count"], 0)
+        self.assertEqual(result["tiles"][0]["accepted_after_dedup"], 1)
 
     def test_save_predictions_accepts_verified_empty_points(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             predict.save_predictions(np.empty((0, 2)), None, temp_dir)
             summary = json.loads((Path(temp_dir) / "summary.json").read_text(encoding="utf-8"))
             self.assertEqual(summary["count"], 0)
+            with (Path(temp_dir) / "centers.csv").open(newline="", encoding="utf-8") as f:
+                rows = list(csv.reader(f))
+            self.assertEqual(
+                rows, [["cell_id", "x", "y", "soma_area", "process_area", "status"]]
+            )
 
 
 if __name__ == "__main__":

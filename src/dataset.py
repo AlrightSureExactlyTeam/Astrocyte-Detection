@@ -137,6 +137,18 @@ class AstrocyteDataset(Dataset):
         raw_image = load_image(sample["image_path"])
         original_height, original_width = raw_image.shape[:2]
         points = read_point_annotations(sample["annotation_path"])
+        # FIX [Liu]: reject invalid source coordinates before resizing can hide them.
+        out_of_bounds = (
+            (points[:, 0] < 0) | (points[:, 0] >= original_width)
+            | (points[:, 1] < 0) | (points[:, 1] >= original_height)
+        )
+        if np.any(out_of_bounds):
+            examples = points[out_of_bounds][:5].tolist()
+            raise ValueError(
+                f"Out-of-bounds annotations in sample {sample['sample_id']!r}: "
+                f"image size (width={original_width}, height={original_height}), "
+                f"point examples={examples}"
+            )
 
         # IMPLEMENTED [Liu]: apply identical resize geometry to image and points.
         image = prepare_image(raw_image, channel=self.channel).unsqueeze(0)
@@ -189,6 +201,7 @@ class AstrocyteDataset(Dataset):
             "tile_offset": (0, 0),
             "level": 0,
             "annotation_available": True,
+            "annotation_empty": len(points) == 0,
             "semantic_available": semantic_mask is not None,
             "instance_available": instance_mask is not None,
         }

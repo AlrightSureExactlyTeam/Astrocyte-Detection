@@ -99,7 +99,30 @@ class TestAstrocyteDataset(unittest.TestCase):
             _, targets, metadata = dataset[0]
             self.assertFalse(targets["semantic_valid_mask"].any())
             self.assertTrue(targets["valid_mask"].all())
+            self.assertTrue(np.all(targets["center_heatmap"].numpy() == 0))
             self.assertFalse(metadata["semantic_available"])
+            self.assertTrue(metadata["annotation_available"])
+            self.assertTrue(metadata["annotation_empty"])
+
+    def test_rejects_out_of_bounds_source_annotations(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "images").mkdir()
+            (root / "positions").mkdir()
+            tifffile.imwrite(
+                root / "images" / "sample_oob.tif", np.zeros((10, 20), dtype=np.uint8)
+            )
+            (root / "positions" / "sample_oob.txt").write_text("20,5\n", encoding="utf-8")
+            dataset = AstrocyteDataset(root / "images", root / "positions", image_size=(5, 10))
+
+            with self.assertRaises(ValueError) as context:
+                dataset[0]
+
+            message = str(context.exception)
+            self.assertIn("sample_oob", message)
+            self.assertIn("width=20", message)
+            self.assertIn("height=10", message)
+            self.assertIn("[20.0, 5.0]", message)
 
     def test_rejects_unpaired_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -108,19 +108,23 @@ def set_seed(seed: int = 42) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-        # FIX (review B7): make GPU runs reproducible too (no-op on CPU-only
-        # machines, which is this project's target).
+        # FIX (review B7): make CUDA training runs reproducible.
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
 
-def get_device(preference: str = "auto") -> torch.device:
-    """Resolve the compute device. This project targets CPU-only machines too."""
-    if preference == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def get_device(preference: str = "cuda") -> torch.device:
+    """Resolve an NVIDIA CUDA device for training; never fall back to CPU."""
+    if preference == "auto":  # Backward-compatible alias for existing commands.
+        preference = "cuda"
     device = torch.device(preference)
-    if device.type == "cuda" and not torch.cuda.is_available():
-        raise ValueError("CUDA requested but not available on this machine")
+    if device.type != "cuda":
+        raise ValueError("Training requires an NVIDIA CUDA GPU; CPU training is disabled")
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA training requested but PyTorch cannot access an NVIDIA GPU. "
+            "Install CUDA-enabled PyTorch and a compatible NVIDIA driver."
+        )
     return device
 
 
@@ -324,8 +328,10 @@ def train(config: dict, device: torch.device, progress=print) -> dict:
     """Full training run: dataloaders -> epochs -> checkpoints + history.json.
 
     IMPLEMENTED [Liu]: training budget + early stopping (patience) driven by
-    validation loss; best and last checkpoints are both kept.
+    validation loss; best and last checkpoints are both kept. NVIDIA CUDA is
+    mandatory for real training, including direct Python API calls.
     """
+    device = get_device(str(device))
     # FIX (review B1): same package/script import branch as the model import,
     # so `python -m src.train` works as well as `python src/train.py`.
     # IMPLEMENTED [Liu]: real BBBC042 loaders now use the same target contract.
@@ -508,7 +514,7 @@ def main():
     parser = argparse.ArgumentParser(description="Train AstrocyteUNet")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH),
                         help="Path to config.yaml")
-    parser.add_argument("--device", default="auto", help="auto / cpu / cuda")
+    parser.add_argument("--device", default=None, help="cuda or cuda:N (default: training.device or cuda)")
     parser.add_argument("--epochs", type=int, default=None,
                         help="Override training.epochs (self-test default: 3)")
     parser.add_argument("--self-test", action="store_true",
@@ -521,7 +527,7 @@ def main():
             raise ValueError("--epochs must be positive")
         config["training"]["epochs"] = args.epochs
     set_seed(config.get("project", {}).get("seed", 42))
-    device = get_device(args.device)
+    device = get_device(args.device or config.get("training", {}).get("device", "cuda"))
     print(f"device: {device}")
 
     if args.self_test:

@@ -29,7 +29,7 @@ def parser_for(stage):
     parser.add_argument("--experiment-name", default="pilot")
     parser.add_argument("--checkpoint")
     parser.add_argument("--match-distance", type=float, default=8.0)
-    parser.add_argument("--device", default="cpu", choices=["cpu"])
+    parser.add_argument("--device", default=None, help="Training device: cuda or cuda:N (default: training.device or cuda)")
     parser.add_argument("--model", choices=["unet", "cellpose"])
     parser.add_argument("--stage", choices=["validate", "train", "predict", "evaluate", "compare", "report", "all"])
     return parser
@@ -128,7 +128,8 @@ def run_stage(stage, args):
     if stage == "train":
         config = load_config(args.config)
         set_seed(config.get("project", {}).get("seed", 42))
-        result = train(config, get_device("cpu"))
+        device = get_device(args.device or config.get("training", {}).get("device", "cuda"))
+        result = train(config, device)
         print(json.dumps(result, indent=2))
         return 0
 

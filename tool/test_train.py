@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +16,7 @@ try:
 except ImportError:
     sys.modules["segmentation_models_pytorch"] = types.SimpleNamespace(Unet=None)
 
-from train import CompositeLoss, build_criterion, validate_config
+from train import CompositeLoss, build_criterion, get_device, train, validate_config
 
 
 class TestCompositeLoss(unittest.TestCase):
@@ -100,6 +101,27 @@ class TestTrainingConfig(unittest.TestCase):
                 config[section][key] = value
                 with self.assertRaises(ValueError):
                     validate_config(config)
+
+
+class TestCudaTrainingDevice(unittest.TestCase):
+    def test_default_auto_and_indexed_device_resolve_to_cuda(self):
+        with patch("torch.cuda.is_available", return_value=True):
+            self.assertEqual(get_device().type, "cuda")
+            self.assertEqual(get_device("auto").type, "cuda")
+            self.assertEqual(str(get_device("cuda:1")), "cuda:1")
+
+    def test_missing_cuda_fails_instead_of_falling_back_to_cpu(self):
+        with patch("torch.cuda.is_available", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "CUDA training requested"):
+                get_device()
+
+    def test_cpu_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "CPU training is disabled"):
+            get_device("cpu")
+
+    def test_real_training_api_also_rejects_cpu(self):
+        with self.assertRaisesRegex(ValueError, "CPU training is disabled"):
+            train({}, torch.device("cpu"))
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ cell_id,x,y,status
 
 ## 2. 常用命令
 
-以下命令均在项目根目录执行，默认只使用 CPU。
+以下命令均在项目根目录执行。训练默认使用 `training.device: cuda`，要求 NVIDIA GPU、兼容驱动和 CUDA 版 PyTorch，不会回退到 CPU；预测与评估仍默认使用 CPU。
 
 ```powershell
 # 数据校验：图像未到位时也生成报告，不伪造精度
@@ -46,8 +46,8 @@ python tool/run_experiment.py --stage report --experiment-dir results/experiment
 # 完整评估：校验 + 两个模型预测 + 评估 + 比较 + 图表 + 报告；不会训练
 python tool/run_experiment.py --stage all --checkpoint checkpoints/RUN_NAME/best.pt --match-distance 8
 
-# 显式单独训练（仅在你确认需要时执行）
-python tool/run_experiment.py --stage train
+# 显式单独训练（仅在你确认需要时执行；默认 cuda，可用 --device cuda:1 指定显卡）
+python tool/run_experiment.py --stage train --device cuda
 ```
 
 也可以使用独立入口：`tool/validate_real_data.py`、`tool/predict_real_images.py`、`tool/run_cellpose_baseline.py`、`tool/evaluate_predictions.py`、`tool/compare_models.py`、`tool/visualize_comparison.py` 和 `tool/generate_report.py`。

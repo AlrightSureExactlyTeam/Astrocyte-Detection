@@ -29,6 +29,7 @@ model:
   # Model returns raw logits (no final softmax/sigmoid during training).
 
 training:
+  device: cuda  # NVIDIA GPU required for training; no silent CPU fallback.
   batch_size: 8  # TODO [Liu]: adjust to available GPU memory.
   epochs: 100
   early_stopping_patience: 20

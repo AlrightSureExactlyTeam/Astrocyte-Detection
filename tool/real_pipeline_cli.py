@@ -101,6 +101,10 @@ def read_metric_rows(experiment, models=("unet", "cellpose")):
 
 
 def finalize(experiment, rows, validation=None, visualize=False):
+    if validation is None:
+        validation_path = experiment / "validation" / "validation_report.json"
+        if validation_path.is_file():
+            validation = json.loads(validation_path.read_text(encoding="utf-8"))
     comparisons = compare_metrics(rows)
     summary = generate_summary(experiment, rows, comparisons, validation)
     if visualize and rows:

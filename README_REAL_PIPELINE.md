@@ -75,6 +75,8 @@ results/experiments/pilot_YYYYMMDD_HHMMSS/
 - 与 uncertain 匹配的剩余预测记为 ignored，不计入主要 FP；uncertain 不会变成 TP，也不会压制 confirmed 匹配。
 - 匹配距离通过 `--match-distance` 配置并写入结果；应结合像素间距和人工标注误差选择。
 - Micro-F1 由所有 ROI 汇总后的 TP/FP/FN 计算，不是各 ROI F1 的平均值。
+- 每个已参与评估的模型必须覆盖全部配对 ROI；缺失或多余的预测 CSV 会明确报错，避免静默丢弃 ROI 后得到偏乐观的指标。
+- 分阶段执行 `evaluate`、`compare`、`report` 时会复用已保存的数据校验报告，不会把校验状态重置为未记录。
 - 只运行一个模型时会保留其结果，并明确标记比较不完整。
 - 计数误差为 `有效预测数（排除 ignored）− confirmed 标注数`，只有在人工 confirmed 标注覆盖足够完整时才具有计数性能意义。
 

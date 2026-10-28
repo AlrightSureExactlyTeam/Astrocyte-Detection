@@ -161,6 +161,33 @@ class PipelineCase(unittest.TestCase):
         self.assertEqual(comparisons[0]["unet_tp"], 1)
         self.assertEqual(comparisons[0]["cellpose_f1"], 1.0)
 
+    def test_evaluation_rejects_missing_roi_predictions(self):
+        self.write_annotation("roi_02", [(1, 10, 10, "confirmed")])
+        tifffile.imwrite(self.data / "images" / "roi_02.tif", self.image)
+        experiment = self.root / "incomplete"
+        self.write_prediction(experiment, "unet", "roi_01", [[20, 10]])
+        with self.assertRaisesRegex(ValueError, "missing ROI predictions: roi_02"):
+            evaluate_experiment(self.data, experiment, models=("unet",), max_distance=2)
+
+    def test_staged_cli_preserves_validation_and_generates_outputs(self):
+        experiment = self.root / "staged"
+        for model in ("unet", "cellpose"):
+            self.write_prediction(experiment, model, "roi_01", [[20, 10]])
+        common = [
+            "--data-root", str(self.data), "--experiment-dir", str(experiment),
+            "--config", str(ROOT / "configs" / "config.yaml"), "--match-distance", "2",
+        ]
+        for stage in ("evaluate", "compare", "report"):
+            command = [sys.executable, str(ROOT / "tool" / "run_experiment.py"), "--stage", stage, *common]
+            completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+        summary = json.loads((experiment / "metrics" / "summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(summary["status"], "complete")
+        self.assertEqual(summary["validation_status"], "valid")
+        self.assertEqual(summary["match_distance_pixels"], 2.0)
+        self.assertIn("Validation status: valid", (experiment / "report.md").read_text(encoding="utf-8"))
+        self.assertTrue((experiment / "metrics" / "comparison.csv").is_file())
+
     def test_single_model_comparison_is_incomplete(self):
         rows = [evaluate_points(np.array([[20, 10]]), read_annotations(self.data / "annotations" / "roi_01.csv"), 2, "roi_01", "unet")]
         comparisons = compare_metrics(rows)

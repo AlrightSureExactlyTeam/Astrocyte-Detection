@@ -145,6 +145,8 @@ class CompositeLoss(nn.Module):
         semantic_mask = targets["semantic_mask"].long()
         center_heatmap = targets["center_heatmap"].float()
         valid_mask = targets["valid_mask"].bool()
+        # IMPLEMENTED [Liu]: point-only samples supervise centers, not semantics.
+        semantic_valid_mask = targets.get("semantic_valid_mask", valid_mask).bool()
 
         if semantic_logits.ndim != 4 or semantic_logits.shape[1] != NUM_SEMANTIC_CLASSES:
             raise ValueError(f"semantic_logits must be [B,{NUM_SEMANTIC_CLASSES},H,W]")
@@ -152,24 +154,26 @@ class CompositeLoss(nn.Module):
             raise ValueError("semantic_mask shape must match logits [B,H,W]")
         if center_heatmap.shape != center_logits.shape:
             raise ValueError("center_heatmap must match center_logits [B,1,H,W]")
-        if valid_mask.shape != semantic_mask.shape:
-            raise ValueError("valid_mask must match semantic_mask [B,H,W]")
+        if valid_mask.shape != semantic_mask.shape or semantic_valid_mask.shape != semantic_mask.shape:
+            raise ValueError("valid masks must match semantic_mask [B,H,W]")
 
-        n_valid = int(valid_mask.sum().item())
-        if n_valid == 0:
-            # FIX: a fully ignored batch must not produce NaN gradients.
-            zero = semantic_logits.sum() * 0.0
-            return {"loss": zero, "semantic_loss": zero, "center_loss": zero}
+        zero = (semantic_logits.sum() + center_logits.sum()) * 0.0
+        n_center_valid = int(valid_mask.sum().item())
+        n_semantic_valid = int(semantic_valid_mask.sum().item())
 
-        # Semantic head: per-pixel CE, averaged over valid pixels only.
-        ce = nn.functional.cross_entropy(semantic_logits, semantic_mask, reduction="none")
-        semantic_loss = (ce * valid_mask).sum() / n_valid
+        if n_semantic_valid:
+            ce = nn.functional.cross_entropy(semantic_logits, semantic_mask, reduction="none")
+            semantic_loss = (ce * semantic_valid_mask).sum() / n_semantic_valid
+        else:
+            semantic_loss = zero
 
-        # Center head: per-pixel BCE-with-logits, averaged over valid pixels only.
-        bce = nn.functional.binary_cross_entropy_with_logits(
-            center_logits, center_heatmap, reduction="none"
-        )
-        center_loss = (bce.squeeze(1) * valid_mask).sum() / n_valid
+        if n_center_valid:
+            bce = nn.functional.binary_cross_entropy_with_logits(
+                center_logits, center_heatmap, reduction="none"
+            )
+            center_loss = (bce.squeeze(1) * valid_mask).sum() / n_center_valid
+        else:
+            center_loss = zero
 
         loss = self.semantic_weight * semantic_loss + self.center_weight * center_loss
         return {"loss": loss, "semantic_loss": semantic_loss, "center_loss": center_loss}
@@ -264,7 +268,7 @@ def train(config: dict, device: torch.device, progress=print) -> dict:
     """
     # FIX (review B1): same package/script import branch as the model import,
     # so `python -m src.train` works as well as `python src/train.py`.
-    # TODO [Zhang]: dataset.py is still a stub.
+    # IMPLEMENTED [Liu]: real BBBC042 loaders now use the same target contract.
     if __package__:
         from .dataset import build_dataloaders
     else:

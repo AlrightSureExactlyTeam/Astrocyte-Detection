@@ -12,7 +12,11 @@ data:
   # TODO [Zhang]: verify image filename <-> annotation filename mapping.
   # TODO [Zhang]: confirm whether coordinates are (x,y) or (row,column), and index origin.
   input_channels: 1  # TODO [Zhu]: confirm GFAP/channel choice and normalization.
-  image_size: [256, 256]  # TODO [Zhang]: decide resize vs crop; transform points consistently.
+  channel: null  # Fluorescence channel index for multi-channel images; null = single-channel/RGB behavior.
+  masks_dir: null  # Optional expert masks: <stem>_semantic.tif + <stem>_instance.tif (full supervision).
+  soma_radius_pixels: 5.0  # Point supervision: disk around each point labeled soma(1).
+  background_distance_pixels: 16.0  # Beyond this distance: confident background; ring in between is ignored.
+  image_size: [256, 256]  # Training crop; val/test use deterministic full-coverage crops.
   train_fraction: 0.70
   val_fraction: 0.15
   test_fraction: 0.15
@@ -30,6 +34,7 @@ model:
   # Model returns raw logits (no final softmax/sigmoid during training).
 
 training:
+  device: cuda  # NVIDIA GPU required for training; no silent CPU fallback.
   batch_size: 8  # TODO [Liu]: adjust to available GPU memory.
   epochs: 50  # TODO [Liu]: decide training budget and early stopping.
   learning_rate: 0.0001
@@ -41,7 +46,10 @@ training:
 inference:
   threshold: 0.5  # TODO [Liu]: tune on validation set, not test set.
   min_distance_pixels: 5  # TODO [Zhang]: tune based on center spacing.
-  # TODO [Zhang]: map predicted centers back to original image coordinates.
+  tile_size: 512  # Whole-slide tile size in selected-level pixels.
+  overlap_pixels: 64  # Tile overlap; duplicate centers are deduplicated globally.
+  level: 0  # QPTIFF resolution level used for inference and stitched masks.
+  mask_pixel_budget: 100000000  # Above this, skip full masks and warn; points/CSV remain available.
 
 baseline:
   model: cpsam  # TODO [Zhang]: verify Cellpose version/API and model availability.

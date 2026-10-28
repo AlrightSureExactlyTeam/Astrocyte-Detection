@@ -30,8 +30,8 @@ model:
 
 training:
   batch_size: 8  # TODO [Liu]: adjust to available GPU memory.
-  epochs: 50
-  early_stopping_patience: 10
+  epochs: 100
+  early_stopping_patience: 20
   learning_rate: 0.0001
   optimizer: adam
   loss: bce_with_logits  # TODO [Liu]: evaluate suitability for sparse heatmaps.

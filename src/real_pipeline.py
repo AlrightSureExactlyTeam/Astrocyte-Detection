@@ -352,16 +352,28 @@ def evaluate_experiment(data_root, experiment_dir, models=("unet", "cellpose"), 
     annotations, annotation_errors = _annotation_index(root / "annotations")
     if image_errors or annotation_errors:
         raise ValueError("; ".join(image_errors + annotation_errors))
+    expected_ids = set(images) & set(annotations)
+    if not expected_ids:
+        raise ValueError("No paired original images and annotations are available for evaluation")
     all_rows = []
     for model in models:
         prediction_dir = experiment / model / "predictions"
         if not prediction_dir.is_dir():
             continue
+        prediction_paths = sorted(prediction_dir.glob("*.csv"))
+        prediction_ids = {path.stem for path in prediction_paths}
+        missing = sorted(expected_ids - prediction_ids)
+        extra = sorted(prediction_ids - expected_ids)
+        if missing or extra:
+            details = []
+            if missing:
+                details.append(f"missing ROI predictions: {', '.join(missing)}")
+            if extra:
+                details.append(f"predictions without paired input: {', '.join(extra)}")
+            raise ValueError(f"Incomplete {model} evaluation coverage ({'; '.join(details)})")
         rows = []
-        for path in sorted(prediction_dir.glob("*.csv")):
+        for path in prediction_paths:
             image_id = path.stem
-            if image_id not in images or image_id not in annotations:
-                raise ValueError(f"Prediction {image_id} lacks a paired original image/annotation")
             predictions, _ = read_predictions(path, expected_model=model)
             image = load_image(images[image_id])
             _check_bounds(predictions, image.shape[1], image.shape[0], "Prediction")

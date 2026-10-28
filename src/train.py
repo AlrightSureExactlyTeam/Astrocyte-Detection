@@ -108,23 +108,19 @@ def set_seed(seed: int = 42) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-        # FIX (review B7): make CUDA training runs reproducible.
+        # FIX (review B7): make GPU runs reproducible too (no-op on CPU-only
+        # machines, which is this project's target).
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
 
-def get_device(preference: str = "cuda") -> torch.device:
-    """Resolve an NVIDIA CUDA device for training; never fall back to CPU."""
-    if preference == "auto":  # Backward-compatible alias for existing commands.
-        preference = "cuda"
+def get_device(preference: str = "auto") -> torch.device:
+    """Resolve the compute device. This project targets CPU-only machines too."""
+    if preference == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device(preference)
-    if device.type != "cuda":
-        raise ValueError("Training requires an NVIDIA CUDA GPU; CPU training is disabled")
-    if not torch.cuda.is_available():
-        raise RuntimeError(
-            "CUDA training requested but PyTorch cannot access an NVIDIA GPU. "
-            "Install CUDA-enabled PyTorch and a compatible NVIDIA driver."
-        )
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise ValueError("CUDA requested but not available on this machine")
     return device
 
 
@@ -147,6 +143,29 @@ def build_model(config: dict) -> nn.Module:
         )
     return create_model(in_channels=in_channels,
                         encoder_name=model_cfg.get("encoder", "resnet18"))
+
+
+def load_init_weights(model: nn.Module, weights_path: str | Path) -> str:
+    """Load existing weights into a model for fine-tuning.
+
+    The checkpoint must carry the same output-head schema as the current
+    model; otherwise it is rejected rather than silently mis-loaded.
+    """
+    path = Path(weights_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Init weights not found: {path}")
+    checkpoint = torch.load(str(path), map_location="cpu", weights_only=False)
+    expected_heads = {"semantic_classes": NUM_SEMANTIC_CLASSES, "center_channels": 1}
+    if checkpoint.get("output_heads") != expected_heads:
+        raise ValueError(
+            f"Init weights have incompatible output_heads: "
+            f"{checkpoint.get('output_heads')!r}, expected {expected_heads!r}"
+        )
+    state = checkpoint.get("model_state_dict")
+    if not state:
+        raise ValueError("Init weights checkpoint is missing model_state_dict")
+    model.load_state_dict(state, strict=True)
+    return str(path)
 
 
 def build_optimizer(model: nn.Module, config: dict) -> torch.optim.Optimizer:
@@ -328,10 +347,8 @@ def train(config: dict, device: torch.device, progress=print) -> dict:
     """Full training run: dataloaders -> epochs -> checkpoints + history.json.
 
     IMPLEMENTED [Liu]: training budget + early stopping (patience) driven by
-    validation loss; best and last checkpoints are both kept. NVIDIA CUDA is
-    mandatory for real training, including direct Python API calls.
+    validation loss; best and last checkpoints are both kept.
     """
-    device = get_device(str(device))
     # FIX (review B1): same package/script import branch as the model import,
     # so `python -m src.train` works as well as `python src/train.py`.
     # IMPLEMENTED [Liu]: real BBBC042 loaders now use the same target contract.
@@ -364,7 +381,15 @@ def train(config: dict, device: torch.device, progress=print) -> dict:
         yaml.safe_dump(config, f, sort_keys=False, allow_unicode=True)
     history_path = checkpoint_dir / "history.json"
 
-    model = build_model(config).to(device)
+    model = build_model(config)
+    init_weights = train_cfg.get("init_weights")
+    if init_weights:
+        init_path = Path(init_weights)
+        if not init_path.is_absolute():
+            init_path = PROJECT_ROOT / init_path
+        loaded = load_init_weights(model, init_path)
+        progress(f"Loaded init weights for fine-tuning: {loaded}")
+    model = model.to(device)
     optimizer = build_optimizer(model, config)
     criterion = build_criterion(config)
     train_loader, val_loader = build_dataloaders(config)
@@ -514,7 +539,9 @@ def main():
     parser = argparse.ArgumentParser(description="Train AstrocyteUNet")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH),
                         help="Path to config.yaml")
-    parser.add_argument("--device", default=None, help="cuda or cuda:N (default: training.device or cuda)")
+    parser.add_argument("--device", default="auto", help="auto / cpu / cuda")
+    parser.add_argument("--init-weights", default=None,
+                        help="Checkpoint weights to initialize/fine-tune from")
     parser.add_argument("--epochs", type=int, default=None,
                         help="Override training.epochs (self-test default: 3)")
     parser.add_argument("--self-test", action="store_true",
@@ -526,8 +553,10 @@ def main():
         if args.epochs <= 0:
             raise ValueError("--epochs must be positive")
         config["training"]["epochs"] = args.epochs
+    if args.init_weights:
+        config["training"]["init_weights"] = args.init_weights
     set_seed(config.get("project", {}).get("seed", 42))
-    device = get_device(args.device or config.get("training", {}).get("device", "cuda"))
+    device = get_device(args.device)
     print(f"device: {device}")
 
     if args.self_test:

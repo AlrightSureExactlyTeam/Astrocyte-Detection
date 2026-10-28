@@ -285,9 +285,14 @@ def predict_unet_image(image_path, checkpoint_path, config, output_dir, device="
     return points, metadata
 
 
-def predict_cellpose_image(image_path, config, output_dir, device="cpu"):
-    if str(device) != "cpu":
-        raise ValueError("GPU Cellpose inference requires explicit code review and request")
+def predict_cellpose_image(image_path, config, output_dir, device="auto"):
+    if str(device) == "auto":
+        resolved = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        resolved = torch.device(device)
+    if resolved.type == "cuda" and not torch.cuda.is_available():
+        raise ValueError("CUDA requested but not available on this machine")
+    use_gpu = resolved.type == "cuda"
     started = time.perf_counter()
     image = load_image(image_path)
     baseline = config.get("baseline", {})
@@ -295,7 +300,7 @@ def predict_cellpose_image(image_path, config, output_dir, device="cpu"):
     if image.ndim == 3 and image.shape[-1] > 1 and channel is None:
         raise ValueError("Multichannel fluorescence input requires baseline.channel")
     masks = run_cellpose(
-        image, use_gpu=False, channel=channel, diameter=baseline.get("diameter"),
+        image, use_gpu=use_gpu, channel=channel, diameter=baseline.get("diameter"),
         min_size=int(baseline.get("min_size", 15)),
         max_size_fraction=float(baseline.get("max_size_fraction", 0.4)),
     )
@@ -306,7 +311,7 @@ def predict_cellpose_image(image_path, config, output_dir, device="cpu"):
     write_predictions(output_dir / "predictions" / f"{image_id}.csv", image_id, points, "cellpose", shape=image.shape)
     save_overlay(image, points, output_dir / "overlays" / f"{image_id}.png", channel=channel)
     metadata = {
-        "image_id": image_id, "model": "cellpose", "device": "cpu",
+        "image_id": image_id, "model": "cellpose", "device": str(resolved),
         "original_shape": list(image.shape[:2]), "coordinate_scale_xy": [1.0, 1.0],
         "channel": channel, "diameter": baseline.get("diameter"),
         "min_size": int(baseline.get("min_size", 15)),

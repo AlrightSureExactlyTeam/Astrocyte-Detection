@@ -1,0 +1,19 @@
+{
+  "source": "D:\\KP Lab\\IHC slides\\Competetion Slides\\Real\\GBM 好东西\\GBM664_S5\\Scan1\\GBM664_S5_Scan1.qptiff",
+  "size_bytes": 13904013965,
+  "sha256": "f245419436556f741e3a22f247b7f7c6acf15e80d8f5462c1f095607f5d76fdc",
+  "shape_cyx": [
+    3,
+    141120,
+    86400
+  ],
+  "pyramid_levels": 8,
+  "pixel_size_x_um": 0.2495059744104524,
+  "pixel_size_y_um": 0.2495059744104524,
+  "Identifier": "527e35fc-11f8-4f06-8dfc-390fcbbfb568",
+  "SlideID": "GBM664_S5",
+  "AcquisitionSoftware": "Fusion 2.4.0",
+  "ImageType": "FullResolution",
+  "IsUnmixedComponent": "False",
+  "ImageProcessingApplied": "OffsetAndShading"
+}

@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Nested local copies / artifacts (this repo's project lives at the root)
+Astrocyte-Detection-work/
+Astrocyte-Detection/
+checkpoints/
+.venv/

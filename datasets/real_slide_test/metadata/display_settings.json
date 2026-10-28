@@ -1,0 +1,86 @@
+{
+  "channels": [
+    "DAPI",
+    "Opal 620",
+    "Sample AF"
+  ],
+  "colors_rgb": [
+    [
+      0,
+      0,
+      255
+    ],
+    [
+      255,
+      128,
+      0
+    ],
+    [
+      0,
+      0,
+      0
+    ]
+  ],
+  "display_min": [
+    0,
+    0,
+    0
+  ],
+  "display_max": [
+    255.0,
+    242.0,
+    166.0
+  ],
+  "gamma": 1,
+  "note": "Display images only, not quantitative data. Shared sample-derived scaling; not a reproduction of unknown PhenoChart display settings.",
+  "files": [
+    {
+      "input": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\samples\\GBM664_S5_Scan1_x017408_y058368.tif",
+      "rgb": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\rgb_preview\\GBM664_S5_Scan1_x017408_y058368_RGB.tif"
+    },
+    {
+      "input": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\samples\\GBM664_S5_Scan1_x031744_y093184.tif",
+      "rgb": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\rgb_preview\\GBM664_S5_Scan1_x031744_y093184_RGB.tif"
+    },
+    {
+      "input": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\samples\\GBM664_S5_Scan1_x034816_y107520.tif",
+      "rgb": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\rgb_preview\\GBM664_S5_Scan1_x034816_y107520_RGB.tif"
+    },
+    {
+      "input": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\samples\\GBM664_S5_Scan1_x035840_y045056.tif",
+      "rgb": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\rgb_preview\\GBM664_S5_Scan1_x035840_y045056_RGB.tif"
+    },
+    {
+      "input": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\samples\\GBM664_S5_Scan1_x040960_y105472.tif",
+      "rgb": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\rgb_preview\\GBM664_S5_Scan1_x040960_y105472_RGB.tif"
+    },
+    {
+      "input": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\samples\\GBM664_S5_Scan1_x046080_y137216.tif",
+      "rgb": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\rgb_preview\\GBM664_S5_Scan1_x046080_y137216_RGB.tif"
+    },
+    {
+      "input": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\samples\\GBM664_S5_Scan1_x047104_y079872.tif",
+      "rgb": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\rgb_preview\\GBM664_S5_Scan1_x047104_y079872_RGB.tif"
+    },
+    {
+      "input": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\samples\\GBM664_S5_Scan1_x051200_y023552.tif",
+      "rgb": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\rgb_preview\\GBM664_S5_Scan1_x051200_y023552_RGB.tif"
+    },
+    {
+      "input": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\samples\\GBM664_S5_Scan1_x051200_y107520.tif",
+      "rgb": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\rgb_preview\\GBM664_S5_Scan1_x051200_y107520_RGB.tif"
+    },
+    {
+      "input": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\samples\\GBM664_S5_Scan1_x054272_y012288.tif",
+      "rgb": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\rgb_preview\\GBM664_S5_Scan1_x054272_y012288_RGB.tif"
+    },
+    {
+      "input": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\samples\\GBM664_S5_Scan1_x062464_y068608.tif",
+      "rgb": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\rgb_preview\\GBM664_S5_Scan1_x062464_y068608_RGB.tif"
+    },
+    {
+      "input": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\samples\\GBM664_S5_Scan1_x063488_y058368.tif",
+      "rgb": "D:\\KP Lab\\Code\\qptiff_tools\\GBM664_S5_tif_preview\\rgb_preview\\GBM664_S5_Scan1_x063488_y058368_RGB.tif"
+    }
+  ]
+}

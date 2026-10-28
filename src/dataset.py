@@ -61,6 +61,7 @@ class AstrocyteDataset(Dataset):
         transform=None,
         sigma: float = 3.0,
         channel: int | None = None,
+        confirmed_only: bool = False,
         semantic_mask_dir: str | None = None,
         instance_mask_dir: str | None = None,
     ):
@@ -79,6 +80,7 @@ class AstrocyteDataset(Dataset):
         self.transform = transform
         self.sigma = float(sigma)
         self.channel = channel
+        self.confirmed_only = bool(confirmed_only)
 
         images = _index_by_stem(self.image_dir, IMAGE_EXTENSIONS)
         annotations = _index_by_stem(self.annotation_dir, {".txt", ".csv"})
@@ -145,7 +147,9 @@ class AstrocyteDataset(Dataset):
         sample = self.samples[index]
         raw_image = load_image(sample["image_path"])
         original_height, original_width = raw_image.shape[:2]
-        points = read_point_annotations(sample["annotation_path"])
+        points = read_point_annotations(
+            sample["annotation_path"], confirmed_only=self.confirmed_only
+        )
         # FIX [Liu]: reject invalid source coordinates before resizing can hide them.
         out_of_bounds = (
             (points[:, 0] < 0) | (points[:, 0] >= original_width)
@@ -269,11 +273,15 @@ class AstrocyteDataset(Dataset):
         return image, targets, metadata
 
 
-def read_point_annotations(annotation_path: str | Path) -> np.ndarray:
+def read_point_annotations(
+    annotation_path: str | Path, confirmed_only: bool = False
+) -> np.ndarray:
     """Read BBBC042 boxes or simple ``x,y`` rows and return center points.
 
     BBBC042 rows are ``Cell ... x1 y1 x2 y2 ...``; the center is the box midpoint.
     Empty files represent an explicitly empty annotation, not a missing label.
+    When ``confirmed_only`` is true, real CSV rows whose status is not
+    ``confirmed`` (e.g. ``uncertain``) are skipped.
     """
     path = Path(annotation_path)
     if not path.is_file():
@@ -299,6 +307,9 @@ def read_point_annotations(annotation_path: str | Path) -> np.ndarray:
                     fields = line.replace(",", " ").split()
                     if len(fields) == 4 and fields[0].isdigit():
                         # Optional cell_id,x,y,status CSV format.
+                        status = fields[3].lower()
+                        if confirmed_only and status != "confirmed":
+                            continue
                         fields = fields[1:3]
                     if len(fields) < 2:
                         raise ValueError("Expected x,y coordinates")
@@ -384,6 +395,7 @@ def build_dataloaders(config: dict):
         image_size=tuple(data_cfg.get("image_size", (512, 512))),
         sigma=float(config.get("heatmap", {}).get("sigma_pixels", 3.0)),
         channel=data_cfg.get("channel"),
+        confirmed_only=bool(data_cfg.get("confirmed_only", False)),
         semantic_mask_dir=data_cfg.get("semantic_mask_dir"),
         instance_mask_dir=data_cfg.get("instance_mask_dir"),
     )

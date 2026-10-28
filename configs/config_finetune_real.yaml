@@ -1,0 +1,64 @@
+# Fine-tuning on the 20 real GFAP ROIs.
+# Starts from the existing BBBC042-trained U-Net (training.init_weights),
+# uses only confirmed centers, and holds out 20% (4 images) for validation /
+# later comparison against Cellpose.
+#
+# Run from the project root:
+#   python src/train.py --config configs/config_finetune_real.yaml
+
+project:
+  name: Astrocyte_Detection
+  seed: 42
+
+data:
+  root: datasets/real_slide_test
+  images_dir: datasets/real_slide_test/images
+  annotations_dir: datasets/real_slide_test/annotations
+  input_channels: 1
+  channel: 1  # GFAP = Opal 620 (0=DAPI, 1=Opal620, 2=AF)
+  image_size: [256, 256]  # match the size the existing model was trained at
+  confirmed_only: true  # train only on status=confirmed centers; skip uncertain
+  train_fraction: 0.8   # 16 images
+  val_fraction: 0.2     # 4 held-out images
+  test_fraction: 0.0
+
+heatmap:
+  sigma_pixels: 3.0
+
+model:
+  architecture: unet
+  encoder: resnet18
+  encoder_weights: null
+  output_channels: 4  # 3 semantic classes + 1 center channel
+
+training:
+  init_weights: checkpoints/run_20261029_012527/best.pt  # fine-tune from here
+  batch_size: 8
+  epochs: 60
+  early_stopping_patience: 15
+  learning_rate: 0.00005  # smaller LR for fine-tuning
+  optimizer: adam
+  loss: bce_with_logits
+  num_workers: 0
+  checkpoint_dir: checkpoints
+
+inference:
+  channel: 1
+  threshold: 0.16  # best threshold from sweep at 256 resolution (F1=0.096)
+  min_distance_pixels: 5
+  semantic_confidence_threshold: null
+  tile_size: 512
+  overlap: 32
+  level: 0
+  series_index: 0
+  dedup_distance_pixels: 5
+
+baseline:
+  model: cpsam
+  channel: 1
+
+evaluation:
+  match_radius_pixels: 8
+
+ffpe:
+  enabled: false

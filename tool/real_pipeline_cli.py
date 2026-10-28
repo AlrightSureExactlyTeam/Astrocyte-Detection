@@ -29,7 +29,7 @@ def parser_for(stage):
     parser.add_argument("--experiment-name", default="pilot")
     parser.add_argument("--checkpoint")
     parser.add_argument("--match-distance", type=float, default=8.0)
-    parser.add_argument("--device", default=None, help="Training device: cuda or cuda:N (default: training.device or cuda)")
+    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--model", choices=["unet", "cellpose"])
     parser.add_argument("--stage", choices=["validate", "train", "predict", "evaluate", "compare", "report", "all"])
     return parser
@@ -55,7 +55,7 @@ def snapshot(experiment, args):
     config = load_yaml(args.config)
     config["real_experiment"] = {
         "data_root": str(Path(args.data_root)), "match_distance_pixels": args.match_distance,
-        "checkpoint": args.checkpoint, "device": "cpu",
+        "checkpoint": args.checkpoint, "device": args.device,
     }
     with (experiment / "experiment_config.yaml").open("w", encoding="utf-8") as handle:
         yaml.safe_dump(config, handle, sort_keys=False, allow_unicode=True)
@@ -78,9 +78,9 @@ def predict(args, experiment, config, model):
             raise FileNotFoundError(f"Checkpoint not found: {args.checkpoint}")
     for image_path in images.values():
         if model == "unet":
-            predict_unet_image(image_path, args.checkpoint, config, experiment / "unet", "cpu")
+            predict_unet_image(image_path, args.checkpoint, config, experiment / "unet", args.device)
         else:
-            predict_cellpose_image(image_path, config, experiment / "cellpose", "cpu")
+            predict_cellpose_image(image_path, config, experiment / "cellpose", args.device)
     print(f"{model} predictions saved under {experiment / model}")
 
 
@@ -128,8 +128,7 @@ def run_stage(stage, args):
     if stage == "train":
         config = load_config(args.config)
         set_seed(config.get("project", {}).get("seed", 42))
-        device = get_device(args.device or config.get("training", {}).get("device", "cuda"))
-        result = train(config, device)
+        result = train(config, get_device(args.device))
         print(json.dumps(result, indent=2))
         return 0
 

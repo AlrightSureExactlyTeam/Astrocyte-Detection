@@ -29,7 +29,6 @@ model:
   # Model returns raw logits (no final softmax/sigmoid during training).
 
 training:
-  device: cuda  # NVIDIA GPU required for training; no silent CPU fallback.
   batch_size: 8  # TODO [Liu]: adjust to available GPU memory.
   epochs: 100
   early_stopping_patience: 20
@@ -40,7 +39,8 @@ training:
   checkpoint_dir: checkpoints
 
 inference:
-  threshold: 0.5  # TODO [Liu]: tune on validation set, not test set.
+  channel: 1  # GFAP = Opal 620 in raw 3-channel OME-TIFF (0=DAPI, 1=Opal620, 2=AF).
+  threshold: 0.16  # best threshold from sweep at 256 resolution (F1=0.096)
   min_distance_pixels: 5  # NOTE [Liu]: calibrate using validation center spacing.
   semantic_confidence_threshold: null
   tile_size: 512
@@ -52,6 +52,7 @@ inference:
 
 baseline:
   model: cpsam  # IMPLEMENTED [Liu]: verified against the installed Cellpose API.
+  channel: 1  # GFAP = Opal 620; Cellpose must use the same channel as U-Net.
   # TODO [Team]: match input preprocessing and evaluation split fairly.
 
 evaluation:

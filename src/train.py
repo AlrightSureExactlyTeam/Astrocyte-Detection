@@ -338,10 +338,24 @@ def train(config: dict, device: torch.device, progress=print) -> dict:
     train_cfg = config["training"]
     epochs = train_cfg.get("epochs", 50)
     patience = train_cfg.get("early_stopping_patience", 10)
-    checkpoint_dir = Path(train_cfg.get("checkpoint_dir", "checkpoints"))
-    if not checkpoint_dir.is_absolute():
-        checkpoint_dir = PROJECT_ROOT / checkpoint_dir
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_root = Path(train_cfg.get("checkpoint_dir", "checkpoints"))
+    if not checkpoint_root.is_absolute():
+        checkpoint_root = PROJECT_ROOT / checkpoint_root
+    checkpoint_root.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    for suffix in range(1000):
+        name = f"run_{timestamp}" if suffix == 0 else f"run_{timestamp}_{suffix:03d}"
+        checkpoint_dir = checkpoint_root / name
+        try:
+            checkpoint_dir.mkdir()
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise RuntimeError(f"Could not allocate a unique run directory in {checkpoint_root}")
+    config["training"]["checkpoint_dir"] = str(checkpoint_dir)
+    with (checkpoint_dir / "config_snapshot.yaml").open("w", encoding="utf-8") as f:
+        yaml.safe_dump(config, f, sort_keys=False, allow_unicode=True)
     history_path = checkpoint_dir / "history.json"
 
     model = build_model(config).to(device)

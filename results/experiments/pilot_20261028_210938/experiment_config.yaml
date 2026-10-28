@@ -1,0 +1,50 @@
+project:
+  name: Astrocyte_Detection
+  seed: 42
+data:
+  root: datasets/BBBC042
+  images_dir: datasets/BBBC042/images
+  annotations_dir: datasets/BBBC042/positions
+  input_channels: 1
+  image_size:
+  - 256
+  - 256
+  train_fraction: 0.7
+  val_fraction: 0.15
+  test_fraction: 0.15
+heatmap:
+  sigma_pixels: 3.0
+model:
+  architecture: unet
+  encoder: resnet18
+  encoder_weights: null
+  output_channels: 4
+training:
+  batch_size: 8
+  epochs: 100
+  early_stopping_patience: 20
+  learning_rate: 0.0001
+  optimizer: adam
+  loss: bce_with_logits
+  num_workers: 0
+  checkpoint_dir: checkpoints
+inference:
+  threshold: 0.5
+  min_distance_pixels: 5
+  semantic_confidence_threshold: null
+  tile_size: 512
+  overlap: 32
+  level: 0
+  series_index: 0
+  dedup_distance_pixels: 5
+baseline:
+  model: cpsam
+evaluation:
+  match_radius_pixels: 8
+ffpe:
+  enabled: false
+real_experiment:
+  data_root: datasets\real_slide_test
+  match_distance_pixels: 8.0
+  checkpoint: checkpoints/RUN_NAME/best.pt
+  device: cpu

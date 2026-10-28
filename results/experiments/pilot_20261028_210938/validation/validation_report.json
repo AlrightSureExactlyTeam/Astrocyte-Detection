@@ -1,0 +1,16 @@
+{
+  "status": "invalid",
+  "data_root": "datasets\\real_slide_test",
+  "image_count": 0,
+  "annotation_count": 0,
+  "paired_count": 0,
+  "confirmed_count": 0,
+  "uncertain_count": 0,
+  "missing_images": [],
+  "missing_annotations": [],
+  "records": [],
+  "errors": [
+    "Missing image directory: datasets\\real_slide_test\\images",
+    "Missing annotation directory: datasets\\real_slide_test\\annotations"
+  ]
+}

@@ -303,3 +303,9 @@ All 49 unit tests passed, covering the Cellpose baseline, coordinate validation,
 | `test_train.py` | `test_rejects_fractional_and_nonfinite_configuration` | OK |
 
 All 74 unit tests passed. New coverage includes mask-aware geometric transforms, explicit group-based splitting, strict training configuration, ambiguous TIFF rejection, tiled-image edge shapes, cross-tile center deduplication and provenance, prediction-output prevalidation, large instance IDs, and numerical overflow guards. The run emitted an expected warning for center-only supervision and a `tifffile` deprecation warning; neither was a test failure. Tests used synthetic inputs and mocked external model inference, so this result does not establish real-data training convergence, real QPTIFF performance, or real-image biological accuracy.
+
+## Experiment 006: GFAP Cellpose Pilot
+
+**Date:** 2026-10-29
+
+结论：本次试验结果非常不理想，没有任何细胞突起被成功画出。下一步进行人工描边。

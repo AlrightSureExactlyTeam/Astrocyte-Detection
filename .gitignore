@@ -224,3 +224,35 @@ Astrocyte-Detection-work/
 Astrocyte-Detection/
 checkpoints/
 .venv/
+
+# GFAP annotation: exclude large images, masks, GUI data and temporary files.
+# Keep workflow source, documentation, CSV/JSON/XML metadata and reports trackable.
+annotation_workspace/raw_exports/**/*.tif
+annotation_workspace/raw_exports/**/*.tiff
+annotation_workspace/raw_exports/**/*.png
+annotation_workspace/raw_exports/**/*.qptiff
+annotation_workspace/cellpose_predictions/**/*.tif
+annotation_workspace/cellpose_predictions/**/*.tiff
+annotation_workspace/cellpose_predictions/**/*.png
+annotation_workspace/cellpose_predictions/**/*.npy
+annotation_workspace/manual_annotations/**/*.tif
+annotation_workspace/manual_annotations/**/*.tiff
+annotation_workspace/manual_annotations/**/*.png
+annotation_workspace/manual_annotations/**/*.npy
+annotation_workspace/verified_masks/**/*.tif
+annotation_workspace/verified_masks/**/*.tiff
+annotation_workspace/verified_masks/**/*.png
+annotation_workspace/previews/**/*.png
+annotation_workspace/previews/**/*.jpg
+annotation_workspace/previews/**/*.jpeg
+annotation_workspace/export/**/*.tif
+annotation_workspace/export/**/*.tiff
+annotation_workspace/export/**/*.png
+annotation_workspace/export/model_cache/
+annotation_workspace/tests/.tmp/
+datasets/GFAP_labeled/images/
+datasets/GFAP_labeled/cell_masks/
+datasets/GFAP_labeled/nucleus_masks/
+datasets/GFAP_pseudo_labeled/images/
+datasets/GFAP_pseudo_labeled/cell_masks/
+datasets/GFAP_pseudo_labeled/nucleus_masks/

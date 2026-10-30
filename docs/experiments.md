@@ -308,4 +308,38 @@ All 74 unit tests passed. New coverage includes mask-aware geometric transforms,
 
 **Date:** 2026-10-29
 
-结论：本次试验结果非常不理想，没有任何细胞突起被成功画出。下一步进行人工描边。
+### Results
+
+| Model | TP | FP | FN | Precision | Recall | F1 |
+|---|---:|---:|---:|---:|---:|---:|
+| U-Net (Threshold = 0.5) | 5 | 29 | 498 | 0.147 | 0.010 | 0.019 |
+| **U-Net (Threshold = 0.2)** | **32** | **169** | **471** | **0.159** | **0.064** | **0.091** |
+| Cellpose | 64 | 523 | 439 | 0.109 | 0.127 | 0.117 |
+
+### Observations
+
+- Lowering the U-Net threshold from 0.5 to 0.2 improved recall and F1 score.
+- U-Net (0.2) achieved the highest precision (0.159).
+- Cellpose achieved the highest recall (0.127) and F1 score (0.117).
+- Both models still missed many target cells.
+
+After obtaining the small dataset, I split the samples into a 16+4 configuration. I used the 16 images and their corresponding data as supplementary input for further training of the previously developed model. The training was set for 25 epochs, with an early-stopping mechanism in place. When evaluated on the training set using a threshold of 0.5, the model failed to detect almost anything; however, by lowering the threshold to 0.2, the precision surpassed that of Cellpose (though the recall remained relatively low).
+
+
+### Follow-up Experiment: Additional Training and Manual Annotation
+
+After the preliminary experiment, we increased the training data and continued training the U-Net model.
+
+However, when generating prediction images, we found that the model failed to detect the thin astrocyte processes. The predicted results mainly showed cell bodies without visible branching structures.
+
+To address this problem, we decided to create manual annotations of GFAP-positive astrocytes.
+
+The manual annotations include:
+- **Soma:** Cell body regions.
+- **Process:** Thin and branching astrocyte processes.
+- **Uncertain:** Possible astrocyte structures that cannot be confidently identified.
+
+These annotations will be used to improve the training data and help the model learn astrocyte morphology, especially thin processes.
+
+**Next Step:** Train the U-Net using the manually annotated data and compare the results with the previous model and Cellpose.
+

@@ -19,9 +19,16 @@ from demo_core.registry import load_model_registry
 from demo_core.reports import OUTPUT_ROOT, report_markdown, save_analysis, save_demo_result
 from demo_core.results import aggregate_metrics, available_samples, comparison_visualization, load_cached_result
 from demo_core.sciencepal_client import SciencePalClient, SciencePalError
+from demo_core.upload_crop import prepare_upload
 from src.preprocessing import load_image
 
 st.set_page_config(page_title="Astrocyte Detection Demo", page_icon="🔬", layout="wide")
+
+
+@st.cache_data(max_entries=1, show_spinner=False)
+def prepare_upload_cached(filename: str, content: bytes):
+    """Avoid repeating lossless crop and verification on every Streamlit rerun."""
+    return prepare_upload(content, filename)
 
 
 @st.cache_resource(max_entries=4)
@@ -46,12 +53,39 @@ with st.sidebar:
     st.header("A · Image input")
     input_kind = st.radio("Input source", ["Validated GFAP sample", "Upload PNG/TIFF"])
     uploaded = None
+    upload_result = None
     if input_kind == "Validated GFAP sample":
         sample_id = st.selectbox("Image identifier", samples)
     else:
         uploaded = st.file_uploader("Original-resolution image", type=["png", "tif", "tiff"])
         sample_id = Path(uploaded.name).stem if uploaded else "upload"
-        st.caption("Files are decoded and validated without resizing or changing intensities.")
+        st.caption("Validated copies keep the left/top pixels; only right/bottom edges are cropped to multiples of 256. No resizing or intensity conversion.")
+        if uploaded is not None:
+            try:
+                upload_result = prepare_upload_cached(uploaded.name, uploaded.getvalue())
+                sample_id = Path(upload_result.filename).stem
+                if upload_result.cropped:
+                    st.success(
+                        f"Cropped and verified: {upload_result.original_width}×{upload_result.original_height} → "
+                        f"{upload_result.output_width}×{upload_result.output_height}"
+                    )
+                else:
+                    st.success(
+                        f"Already compatible: {upload_result.original_width}×{upload_result.original_height}; original bytes verified."
+                    )
+                st.caption(
+                    f"Removed right {upload_result.removed_right}px · bottom {upload_result.removed_bottom}px · "
+                    f"{upload_result.source_format} · {upload_result.channels} channel(s) · pixel verification passed"
+                )
+                st.download_button(
+                    "Download validated crop256 copy",
+                    data=upload_result.data,
+                    file_name=upload_result.filename,
+                    mime=upload_result.media_type,
+                    width="stretch",
+                )
+            except Exception as exc:
+                st.error(f"Upload rejected: {exc}")
 
     st.header("B · Model and mode")
     model_id = st.radio("Model", list(model_by_id), format_func=lambda key: model_by_id[key].name)
@@ -69,7 +103,7 @@ with st.sidebar:
         "Load existing result" if cached_mode else "Run live inference",
         type="primary",
         width="stretch",
-        disabled=(not cached_mode and not model.live_available) or (input_kind != "Validated GFAP sample" and uploaded is None),
+        disabled=(not cached_mode and not model.live_available) or (input_kind != "Validated GFAP sample" and upload_result is None),
     )
 
 if cached_mode and input_kind != "Validated GFAP sample":
@@ -87,8 +121,16 @@ if execute:
             image = load_image(image_path)
             input_metadata = {"source": "validated_project_sample", "image_path": str(image_path)}
         else:
-            image, input_metadata = read_upload(uploaded.name, uploaded.getvalue())
-            input_metadata["source"] = "user_upload"
+            if upload_result is None:
+                raise ValueError("Upload validation did not produce a verified crop256 copy")
+            image, input_metadata = read_upload(upload_result.filename, upload_result.data)
+            input_metadata.update({
+                "source": "user_upload",
+                "original_filename": Path(uploaded.name).name,
+                "crop256": upload_result.to_dict(),
+                "content_modified": upload_result.cropped,
+                "resized": False,
+            })
         validate_for_model(image, model.expected_input)
         if cached_mode:
             result = load_cached_result(sample_id, model)

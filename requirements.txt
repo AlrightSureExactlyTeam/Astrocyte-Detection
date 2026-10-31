@@ -1,0 +1,14 @@
+streamlit>=1.40,<2
+numpy>=1.26,<3
+pandas>=2,<4
+PyYAML>=6,<7
+Pillow>=10,<14
+opencv-python-headless>=4.8,<6
+scipy>=1.11,<2
+scikit-image>=0.22,<1
+tifffile>=2024.1.1
+torch>=2.2,<3
+segmentation-models-pytorch>=0.3,<1
+cellpose==4.2.1.1
+sciencepal-sdk==0.2.2
+python-dotenv>=1,<2

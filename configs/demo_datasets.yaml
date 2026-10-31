@@ -1,0 +1,23 @@
+datasets:
+  - name: GFAP validated manual partial labels
+    image_location: annotation_workspace/manual_annotations/GFAP_morphology/images
+    annotation_location: annotation_workspace/dataset_validation/GFAP_training/run_20261030T064103_082398_all_4abc72/labels/manual
+    annotation_type: manual_partial
+    label_mapping: {soma: 1, process: 2, ignore: 255}
+    source_description: Partial expert labels; unlabeled pixels are not confirmed background.
+    version: validated-2026-10-30
+  - name: GFAP ImageJ weak labels
+    image_location: annotation_workspace/auto_annotations/ImageJ_GFAP/images
+    annotation_location: annotation_workspace/auto_annotations/ImageJ_GFAP/Mask
+    annotation_type: imagej_weak
+    label_mapping: {background_or_unlabeled: 0, gfap_foreground: 1}
+    source_description: Weak GFAP foreground only; negative pixels are not confirmed background.
+    version: validated-2026-10-30
+comparison:
+  run_dir: results/gfap_comparison/run_20261030T092041
+  source_verification: source_verification.json
+  source_pattern: annotation_workspace/raw_exports/GBM664_S5_full_export/tiles/{source_stem}.tif
+  manual_pattern: annotation_workspace/dataset_validation/GFAP_training/run_20261030T064103_082398_all_4abc72/labels/manual/{sample_id}.tif
+  summary_csv: summary.csv
+  aggregate_csv: aggregate_summary.csv
+  visualization_pattern: visualizations/{sample_id}/comparison.png

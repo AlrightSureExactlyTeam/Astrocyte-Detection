@@ -1,0 +1,102 @@
+models:
+  - id: cellpose
+    name: Cellpose CPSAM baseline
+    model_type: cellpose
+    checkpoint: annotation_workspace/export/model_cache/cpsam
+    inference_adapter: cellpose
+    version: cpsam-official-cellpose-4.2.1.1
+    expected_input:
+      min_channels: 2
+      cell_channel: 1
+      nucleus_channel: 0
+      spatial_divisor: 1
+    output_label_mapping:
+      background: 0
+      candidate_cell_instances: positive_integer_ids
+      candidate_nucleus_instances: positive_integer_ids
+    cached:
+      run_dir: results/gfap_comparison/run_20261030T092041
+      mask_pattern: cellpose/{sample_id}/pred_001/cell_mask.tif
+      nucleus_pattern: cellpose/{sample_id}/pred_001/nucleus_mask.tif
+      overlay_pattern: cellpose/overlays/{sample_id}/pred_001_overlay.png
+      statistics_pattern: cellpose/{sample_id}/pred_001/prediction.json
+      comparison_variant: Cellpose foreground
+  - id: unet_v1
+    name: U-Net V1 manual-only
+    model_type: unet
+    checkpoint: results/gfap_unet_pilots/V1_manual/run_20261030T074205_386731_f1d056/checkpoints/final.pt
+    inference_adapter: unet
+    version: technical-pilot-v1
+    expected_input:
+      min_channels: 2
+      cell_channel: 1
+      spatial_divisor: 256
+    output_label_mapping:
+      background: 0
+      soma: 1
+      process: 2
+    cached:
+      run_dir: results/gfap_unet_pilots/V1_manual/run_20261030T074205_386731_f1d056
+      config: config_snapshot.yaml
+      mask_pattern: predictions/{sample_id}/semantic_mask.tif
+      overlay_pattern: predictions/{sample_id}/prediction_overlay.png
+      process_probability_pattern: predictions/{sample_id}/process_probability.png
+      statistics_pattern: predictions/{sample_id}/prediction_statistics.json
+      comparison_variant_foreground: V1 foreground
+      comparison_variant_process: V1 Process
+  - id: unet_v2
+    name: U-Net V2 ImageJ-assisted
+    model_type: unet
+    checkpoint: results/gfap_unet_pilots/V2_ImageJ_assisted/run_20261030T074250_515089_5af405/checkpoints/final.pt
+    inference_adapter: unet
+    version: technical-pilot-v2
+    expected_input:
+      min_channels: 2
+      cell_channel: 1
+      spatial_divisor: 256
+    output_label_mapping:
+      background: 0
+      soma: 1
+      process: 2
+    cached:
+      run_dir: results/gfap_unet_pilots/V2_ImageJ_assisted/run_20261030T074250_515089_5af405
+      config: config_snapshot.yaml
+      mask_pattern: predictions/{sample_id}/semantic_mask.tif
+      overlay_pattern: predictions/{sample_id}/prediction_overlay.png
+      process_probability_pattern: predictions/{sample_id}/process_probability.png
+      statistics_pattern: predictions/{sample_id}/prediction_statistics.json
+      comparison_variant_foreground: V2 foreground
+      comparison_variant_process: V2 Process
+  - id: v33b2
+    name: V3.3-B.2 unified Soma–Process
+    model_type: v33b2
+    checkpoint: results/gfap_v3/pilot_20261030T150553_106077_168461/checkpoints/final.pt
+    inference_adapter: v33b2
+    version: accepted-pilot-v5-adaptive-4px
+    expected_input:
+      min_channels: 2
+      cell_channel: 1
+      spatial_divisor: 1
+      cellpose_checkpoint: annotation_workspace/export/model_cache/cpsam
+      cellpose_checkpoint_sha256: e1440429eb384f95afe32bcba6510f90d518eaedc917ede549bed6804004abe2
+      v3_checkpoint_sha256: 5204cd32fe339b142092bf924af88cc931713c4092b90d7bb8c4a32eac9d3c6f
+    output_label_mapping:
+      not_a_process_candidate: 0
+      assigned: 1
+      ambiguous: 2
+      unassigned: 3
+      rejected: 4
+      soma_and_assigned_process_instances: original_cellpose_ids
+    cached:
+      run_dir: results/gfap_v33b2/pilot_20261031_v33b2_unified_v5
+      source_pattern: annotation_workspace/manual_annotations/GFAP_morphology/images/{sample_id}.tif
+      source_manifest: pilot_source_manifest.csv
+      mask_pattern: predictions/{sample_id}/v33b2_unified/integrated_instance_mask.tif
+      overlay_pattern: predictions/{sample_id}/v33b2_unified/final_integrated_overlay.png
+      statistics_pattern: predictions/{sample_id}/v33b2_unified/tile_statistics.json
+      artifact_patterns:
+        process_state: predictions/{sample_id}/v33b2_unified/process_state.tif
+        unified_process_geometry: predictions/{sample_id}/v33b2_unified/unified_process_geometry.tif
+        soma_candidates: predictions/{sample_id}/v33b2_unified/soma_candidates_copy.tif
+        added_process_geometry: predictions/{sample_id}/v33b2_unified/added_process_geometry.tif
+        structural_unit_records: predictions/{sample_id}/v33b2_unified/structural_unit_records.csv

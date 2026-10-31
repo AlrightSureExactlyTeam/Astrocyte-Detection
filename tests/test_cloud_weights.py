@@ -7,6 +7,7 @@ from dataclasses import replace
 from urllib.error import URLError
 
 import pytest
+import requests
 
 from demo_core.registry import get_model, load_model_registry
 from demo_core.results import available_samples, load_cached_result
@@ -140,3 +141,95 @@ def test_non_https_remote_weight_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setenv(model.deployment["config_url_env"], "http://storage.example/config")
     with pytest.raises(ValueError, match="HTTPS"):
         ensure_unet_checkpoint(model)
+
+
+class _FakeHfResponse:
+    def __init__(self, payload=b"", error=None):
+        self.raw = io.BytesIO(payload)
+        self.error = error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+    def raise_for_status(self):
+        if self.error:
+            raise self.error
+
+
+def _use_private_hf_urls(model, monkeypatch):
+    urls = {
+        "checkpoint": "https://huggingface.co/xinyu-liu2026/astrocyte-unet-demo/resolve/main/v1/final.pt",
+        "config": "https://huggingface.co/xinyu-liu2026/astrocyte-unet-demo/resolve/main/v1/config_snapshot.yaml",
+    }
+    for key, url in urls.items():
+        monkeypatch.setenv(model.deployment[f"{key}_url_env"], url)
+    return urls
+
+
+def test_private_hf_download_uses_header_and_preserves_integrity(tmp_path, monkeypatch):
+    model, _, payloads = _remote_model("unet_v1", tmp_path, monkeypatch)
+    urls = _use_private_hf_urls(model, monkeypatch)
+    token = "hf_read_only_test_token"
+    monkeypatch.setenv("HF_TOKEN", token)
+    calls = []
+
+    def fake_get(url, headers, stream, timeout):
+        calls.append({"url": url, "headers": headers, "stream": stream, "timeout": timeout})
+        key = "checkpoint" if url == urls["checkpoint"] else "config"
+        return _FakeHfResponse(payloads[key])
+
+    monkeypatch.setattr("demo_core.weights.requests.get", fake_get)
+    checkpoint = ensure_unet_checkpoint(model)
+    assert checkpoint.read_bytes() == payloads["checkpoint"]
+    assert len(calls) == 2
+    for call in calls:
+        assert call["headers"] == {"Authorization": f"Bearer {token}"}
+        assert call["stream"] is True and call["timeout"] == (10, 60)
+        assert token not in call["url"]
+
+
+def test_private_hf_download_requires_token_without_network(tmp_path, monkeypatch):
+    model, _, _ = _remote_model("unet_v1", tmp_path, monkeypatch)
+    _use_private_hf_urls(model, monkeypatch)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    def no_network(*args, **kwargs):
+        raise AssertionError("Network request attempted without HF_TOKEN")
+
+    monkeypatch.setattr("demo_core.weights.requests.get", no_network)
+    with pytest.raises(RuntimeError, match="HF_TOKEN"):
+        ensure_unet_checkpoint(model)
+
+
+def test_private_hf_http_failure_is_safe_and_leaves_no_partial_file(tmp_path, monkeypatch):
+    model, _, _ = _remote_model("unet_v1", tmp_path, monkeypatch)
+    _use_private_hf_urls(model, monkeypatch)
+    token = "hf_read_only_test_token"
+    monkeypatch.setenv("HF_TOKEN", token)
+
+    def denied(*args, **kwargs):
+        return _FakeHfResponse(error=requests.HTTPError("401 Unauthorized"))
+
+    monkeypatch.setattr("demo_core.weights.requests.get", denied)
+    with pytest.raises(RuntimeError, match="Could not download") as caught:
+        ensure_unet_checkpoint(model)
+    assert token not in str(caught.value)
+    assert not list((tmp_path / "cache").rglob("*.part"))
+
+
+def test_cross_host_redirect_strips_authorization():
+    session = requests.Session()
+    token = "hf_read_only_test_token"
+    original = requests.Request(
+        "GET", "https://huggingface.co/repo/resolve/main/model.pt",
+        headers={"Authorization": f"Bearer {token}"},
+    ).prepare()
+    redirected = requests.Request("GET", "https://cdn.example/model.pt").prepare()
+    response = requests.Response()
+    response.request = original
+
+    session.rebuild_auth(redirected, response)
+    assert "Authorization" not in redirected.headers

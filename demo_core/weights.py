@@ -12,6 +12,8 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
+import requests
+
 _DOWNLOAD_LOCK = threading.Lock()
 _INFERENCE_LOCK = threading.Lock()
 _CHUNK_SIZE = 1024 * 1024
@@ -73,6 +75,27 @@ def _validate_url(url: str) -> None:
         raise ValueError("Weight URLs must use HTTPS; plain HTTP is allowed only for loopback tests.")
 
 
+@contextmanager
+def _open_download(url: str) -> Iterator[Any]:
+    """Authenticate only Hugging Face requests; never place tokens in URLs."""
+    if urlparse(url).hostname != "huggingface.co":
+        with urlopen(url, timeout=60) as response:
+            yield response
+        return
+    token = os.environ.get("HF_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("Private Hugging Face downloads require HF_TOKEN in Streamlit secrets.")
+    # Requests strips Authorization when a redirect changes the destination host.
+    with requests.get(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        stream=True,
+        timeout=(10, 60),
+    ) as response:
+        response.raise_for_status()
+        yield response.raw
+
+
 def _download(url: str, destination: Path, expected_size: int, expected_sha256: str, label: str) -> None:
     """Download without including signed URLs or credentials in errors."""
     _validate_url(url)
@@ -83,7 +106,7 @@ def _download(url: str, destination: Path, expected_size: int, expected_sha256: 
             dir=destination.parent, prefix=destination.name + ".", suffix=".part", delete=False,
         ) as handle:
             temporary = Path(handle.name)
-            with urlopen(url, timeout=60) as response:
+            with _open_download(url) as response:
                 size = 0
                 digest = hashlib.sha256()
                 while True:
@@ -98,8 +121,10 @@ def _download(url: str, destination: Path, expected_size: int, expected_sha256: 
         if size != expected_size or digest.hexdigest() != expected_sha256:
             raise RuntimeError(f"Downloaded {label} failed integrity verification; inference was not started.")
         os.replace(temporary, destination)
-    except (URLError, TimeoutError, OSError):
-        raise RuntimeError(f"Could not download {label}. Check the configured weight storage and try again.") from None
+    except (URLError, TimeoutError, OSError, requests.RequestException):
+        raise RuntimeError(
+            f"Could not download {label}. Check the configured storage and access permissions."
+        ) from None
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)

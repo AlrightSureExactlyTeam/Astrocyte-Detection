@@ -93,6 +93,10 @@ def _open_download(url: str) -> Iterator[Any]:
         timeout=(10, 60),
     ) as response:
         response.raise_for_status()
+        # Hugging Face serves small text files (e.g. YAML configs) with
+        # Content-Encoding: gzip. Without this, raw.read() returns the
+        # compressed bytes and integrity verification fails on valid files.
+        response.raw.decode_content = True
         yield response.raw
 
 

@@ -1,6 +1,7 @@
 """Focused Cloud weight tests; all downloads are mocked and contain no secrets."""
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 from dataclasses import replace
@@ -8,6 +9,7 @@ from urllib.error import URLError
 
 import pytest
 import requests
+from urllib3 import HTTPResponse
 
 from demo_core.registry import get_model, load_model_registry
 from demo_core.results import available_samples, load_cached_result
@@ -233,3 +235,31 @@ def test_cross_host_redirect_strips_authorization():
 
     session.rebuild_auth(redirected, response)
     assert "Authorization" not in redirected.headers
+
+
+def _gzip_encoded_raw(payload: bytes) -> HTTPResponse:
+    """Faithful stand-in for HF's gzipped text responses."""
+    return HTTPResponse(
+        body=io.BytesIO(gzip.compress(payload)),
+        headers={"Content-Encoding": "gzip"},
+        preload_content=False,
+        decode_content=False,
+    )
+
+
+def test_gzip_encoded_hf_response_is_decoded_before_verification(tmp_path, monkeypatch):
+    """HF gzips small text configs; verification must cover the real bytes."""
+    model, _, payloads = _remote_model("unet_v2", tmp_path, monkeypatch)
+    urls = _use_private_hf_urls(model, monkeypatch)
+    monkeypatch.setenv("HF_TOKEN", "hf_read_only_test_token")
+
+    def fake_get(url, headers, stream, timeout):
+        key = "checkpoint" if url == urls["checkpoint"] else "config"
+        response = _FakeHfResponse()
+        response.raw = _gzip_encoded_raw(payloads[key])
+        return response
+
+    monkeypatch.setattr("demo_core.weights.requests.get", fake_get)
+    checkpoint = ensure_unet_checkpoint(model)
+    assert checkpoint.read_bytes() == payloads["checkpoint"]
+    assert (checkpoint.parent.parent / "config_snapshot.yaml").read_bytes() == payloads["config"]

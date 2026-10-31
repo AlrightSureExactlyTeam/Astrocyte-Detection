@@ -122,7 +122,7 @@ def _run_cellpose(image: np.ndarray, sample_id: str, model: ModelSpec, run_dir: 
 
 
 def _run_unet(image: np.ndarray, sample_id: str, model: ModelSpec, run_dir: Path, device_name: str) -> DemoResult:
-    from annotation_workspace.tools.compare_unet_pilots import display_image, load_checkpoint, predict_tile, prediction_statistics
+    from .unet_runtime import display_image, load_checkpoint, predict_tile, prediction_statistics
     from src.train import get_device
 
     run_source = model.checkpoint.parent.parent

@@ -107,8 +107,21 @@ models:
       rejected: 4
       soma_and_assigned_process_instances: original_cellpose_ids
     deployment:
-      cloud_enabled: false
-      cloud_disabled_reason: V3.3-B.2 Live inference is disabled on Streamlit Community Cloud because its combined CPSAM, V3, and association pipeline has not been validated within Cloud CPU and memory limits. Existing Results remain available.
+      cloud_enabled: true
+      cloud_note: >-
+        Cloud Live uses the verified ONNX Runtime backend (fp32 compute over
+        fp16-stored weights; masks bit-identical to the torch fp32 path on the
+        pilot crop). The default torch bf16 path is ~20x slower and less
+        accurate on CPUs without AVX512-BF16, and does not fit Cloud memory.
+      v3_checkpoint_url_env: ASTROCYTE_V33B2_V3_CHECKPOINT_URL
+      v3_checkpoint_size_bytes: 5471477
+      v3_config_url_env: ASTROCYTE_V33B2_V3_CONFIG_URL
+      v3_config_sha256: 51b71b0a60f9d2a0dc2553825efcdb13686a8af36927075abccb1ba9e95da1bf
+      v3_config_size_bytes: 2206
+      cpsam_onnx_part_url_template_env: ASTROCYTE_CPSAM_ONNX_PART_URL_TEMPLATE
+      cpsam_onnx_parts: 37
+      cpsam_onnx_sha256: 3163cad92f0ae12d7874fb40cb5138887db8f915633f05c177fc92218b63fb33
+      cpsam_onnx_size_bytes: 610264934
     cached:
       run_dir: demo_assets/v33b2
       source_pattern: demo_assets/v33b2/images/{sample_id}.tif

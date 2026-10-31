@@ -39,6 +39,12 @@ class ModelSpec:
             return False
         if self.inference_adapter == "unet":
             return local_unet_ready(self) or (is_streamlit_cloud() and remote_unet_configured(self))
+        if self.inference_adapter == "v33b2":
+            from .weights import remote_v33b2_configured
+
+            return self.checkpoint.is_file() or (
+                is_streamlit_cloud() and remote_v33b2_configured(self)
+            )
         return self.checkpoint.is_file()
 
     @property
@@ -62,6 +68,16 @@ class ModelSpec:
                     return f"U-Net Live inference is not configured; set {', '.join(names)} in Streamlit secrets."
                 return None
             return f"U-Net checkpoint/config not found beside: {self.checkpoint.parent.parent}"
+        if self.inference_adapter == "v33b2" and not self.checkpoint.is_file():
+            from .weights import remote_v33b2_configured
+
+            if is_streamlit_cloud():
+                if not remote_v33b2_configured(self):
+                    return (
+                        "V3.3-B.2 Cloud artifacts are not configured; set the CPSAM ONNX "
+                        "and V3 URLs in Streamlit secrets."
+                    )
+                return None
         if not self.checkpoint.is_file():
             return f"Checkpoint/model file not found: {self.checkpoint}"
         return None

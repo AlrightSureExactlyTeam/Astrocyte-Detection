@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import os
 from dataclasses import asdict
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -53,28 +54,33 @@ def _cellpose_checkpoint(model: ModelSpec) -> Path:
     return resolve_path(value)
 
 
-def validate_v33b2_dependencies(model: ModelSpec) -> dict[str, Path]:
-    """Resolve and verify both fixed checkpoints without loading either model."""
+def validate_v33b2_dependencies(model: ModelSpec) -> dict[str, Any]:
+    """Resolve and verify the fixed checkpoints (local first, verified Cloud fallback)."""
     v3_checkpoint = model.checkpoint
     cellpose_checkpoint = _cellpose_checkpoint(model)
-    for name, path in (("V3", v3_checkpoint), ("Cellpose CPSAM", cellpose_checkpoint)):
-        if not path.is_file():
-            raise FileNotFoundError(f"Required {name} checkpoint not found: {path}")
     config_path = v3_checkpoint.parent.parent / "config_snapshot.yaml"
-    if not config_path.is_file():
-        raise FileNotFoundError(f"Required V3 configuration not found: {config_path}")
-    for name, path, key in (
-        ("V3", v3_checkpoint, "v3_checkpoint_sha256"),
-        ("Cellpose CPSAM", cellpose_checkpoint, "cellpose_checkpoint_sha256"),
-    ):
-        expected = model.expected_input.get(key)
-        if expected and _sha256(path) != expected:
-            raise ValueError(f"{name} checkpoint checksum does not match the accepted pilot: {path}")
-    return {
-        "v3_checkpoint": v3_checkpoint,
-        "cellpose_checkpoint": cellpose_checkpoint,
-        "v3_config": config_path,
-    }
+    if v3_checkpoint.is_file() and cellpose_checkpoint.is_file() and config_path.is_file():
+        for name, path, key in (
+            ("V3", v3_checkpoint, "v3_checkpoint_sha256"),
+            ("Cellpose CPSAM", cellpose_checkpoint, "cellpose_checkpoint_sha256"),
+        ):
+            expected = model.expected_input.get(key)
+            if expected and _sha256(path) != expected:
+                raise ValueError(f"{name} checkpoint checksum does not match the accepted pilot: {path}")
+        return {
+            "v3_checkpoint": v3_checkpoint,
+            "cellpose_checkpoint": cellpose_checkpoint,
+            "v3_config": config_path,
+            "cpsam_onnx": None,
+        }
+    from .weights import ensure_v33b2_remote, is_streamlit_cloud, remote_v33b2_configured
+
+    if is_streamlit_cloud() and remote_v33b2_configured(model):
+        return ensure_v33b2_remote(model)
+    raise FileNotFoundError(
+        "Required V3.3-B.2 checkpoints not found locally and no verified Cloud layout is configured: "
+        f"{v3_checkpoint}, {cellpose_checkpoint}"
+    )
 
 
 @lru_cache(maxsize=2)
@@ -83,13 +89,13 @@ def _load_models(
     cellpose_checkpoint: str,
     v3_config: str,
     device_name: str,
+    cpsam_onnx: str | None = None,
 ):
     """Cache only the selected B.2 dependency models across Streamlit reruns."""
     workspace = PROJECT_ROOT / "annotation_workspace"
     if str(workspace) not in sys.path:
         sys.path.insert(0, str(workspace))
     import torch
-    from cellpose import models
     from gfap_annotation.v3_model import create_v3_model
     from gfap_annotation.v3_training import load_v3_checkpoint
     from src.train import get_device
@@ -103,9 +109,18 @@ def _load_models(
     )
     load_v3_checkpoint(v3_model, Path(v3_checkpoint), device)
     v3_model = v3_model.to(device).eval()
-    cellpose_model = models.CellposeModel(
-        gpu=device.type == "cuda", pretrained_model=cellpose_checkpoint,
-    )
+    if cpsam_onnx:
+        # ORT fp32 backend: same accepted CPSAM weights via ONNX Runtime;
+        # bit-identical masks to the torch fp32 path (verified on the pilot crop).
+        from .ort_backend import build_ort_cellpose
+
+        cellpose_model = build_ort_cellpose(cpsam_onnx)
+    else:
+        from cellpose import models
+
+        cellpose_model = models.CellposeModel(
+            gpu=device.type == "cuda", pretrained_model=cellpose_checkpoint,
+        )
     return cellpose_model, v3_model, device
 
 
@@ -121,8 +136,16 @@ def _validate_input(image: np.ndarray) -> None:
         raise ValueError("Input intensities must be finite numeric values")
 
 
-def _run_pipeline(image: np.ndarray, cellpose_model, v3_model, device) -> dict[str, Any]:
+def _run_pipeline(
+    image: np.ndarray,
+    cellpose_model,
+    v3_model,
+    device,
+    cellpose_parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Invoke the accepted pipeline stages with their original configurations."""
+    if cellpose_parameters is None:
+        cellpose_parameters = CELLPOSE_PARAMETERS
     from gfap_annotation.v31_inference import predict_v3_overlapping
     from gfap_annotation.v32_tracing import TraceConfig, select_soma_candidates, trace_tile
     from gfap_annotation.v33a_tracing import ThinTraceConfig, build_thin_candidates, trace_thin_tile
@@ -140,7 +163,7 @@ def _run_pipeline(image: np.ndarray, cellpose_model, v3_model, device) -> dict[s
         raise RuntimeError("The accepted adaptive 4 px reconstruction is not configured")
 
     gfap, normalization = normalize_for_cellpose(image[..., 1])
-    raw_cellpose = cellpose_model.eval(gfap, **CELLPOSE_PARAMETERS)
+    raw_cellpose = cellpose_model.eval(gfap, **cellpose_parameters)
     cellpose = _validate_prediction(
         raw_cellpose[0] if isinstance(raw_cellpose, (tuple, list)) else raw_cellpose,
         image.shape[:2],
@@ -242,14 +265,29 @@ def run_v33b2_inference(
         image = load_image(image_path)
     paths = validate_v33b2_dependencies(model)
     _validate_input(image)
+
+    from .ort_backend import use_ort_backend
+
+    onnx_path: Path | None = None
+    if use_ort_backend(model):
+        candidate = paths.get("cpsam_onnx") or os.environ.get("ASTROCYTE_CPSAM_ONNX", "").strip()
+        if not candidate:
+            raise RuntimeError("ORT backend selected but no CPSAM ONNX artifact is configured")
+        onnx_path = Path(candidate)
     cellpose_model, v3_model, device = _load_models(
         str(paths["v3_checkpoint"]),
-        str(paths["cellpose_checkpoint"]),
+        str(paths["cellpose_checkpoint"]) if paths["cellpose_checkpoint"] else "",
         str(paths["v3_config"]),
         device_name,
+        str(onnx_path) if onnx_path else None,
+    )
+    # ORT tiles run one at a time on memory-tight Cloud workers; tiles are
+    # independent, so batch_size does not change the math, only peak RAM.
+    cellpose_parameters = (
+        {**CELLPOSE_PARAMETERS, "batch_size": 1} if onnx_path else CELLPOSE_PARAMETERS
     )
     started = perf_counter()
-    prediction = _run_pipeline(image, cellpose_model, v3_model, device)
+    prediction = _run_pipeline(image, cellpose_model, v3_model, device, cellpose_parameters)
     elapsed = perf_counter() - started
 
     from annotation_workspace.tools.compare_gfap_models import display_image
@@ -303,13 +341,14 @@ def run_v33b2_inference(
         "adapter": "demo_core.v33b2_adapter.run_v33b2_inference",
         "v3_checkpoint": str(paths["v3_checkpoint"]),
         "v3_checkpoint_sha256": _sha256(paths["v3_checkpoint"]),
-        "cellpose_checkpoint": str(paths["cellpose_checkpoint"]),
-        "cellpose_checkpoint_sha256": _sha256(paths["cellpose_checkpoint"]),
+        "cellpose_checkpoint": str(paths["cellpose_checkpoint"] or paths.get("cpsam_onnx")),
+        "cellpose_checkpoint_sha256": _sha256(paths["cellpose_checkpoint"] or paths.get("cpsam_onnx")),
+        "cpsam_backend": "onnxruntime_fp32" if onnx_path else "torch_bf16",
         "device": str(device),
         "input_shape": list(image.shape),
         "gfap_channel": 1,
         "gfap_normalization": prediction["normalization"],
-        "cellpose_parameters": CELLPOSE_PARAMETERS,
+        "cellpose_parameters": cellpose_parameters,
         "v31_patch_size": V31_PATCH_SIZE,
         "v31_stride": V31_STRIDE,
         "fixed_configurations": prediction["configs"],

@@ -1,0 +1,142 @@
+[
+  {
+    "sample_id": "GBM664_S5_Scan1_x043008_y109568_RGB",
+    "quantitative_source": "annotation_workspace\\raw_exports\\GBM664_S5_full_export\\tiles\\GBM664_S5_Scan1_x043008_y109568.tif",
+    "manual_rgb_source": "annotation_workspace\\manual_annotations\\GFAP_morphology\\images\\GBM664_S5_Scan1_x043008_y109568_RGB.tif",
+    "exported_rgb_source": "annotation_workspace\\raw_exports\\GBM664_S5_full_export\\rgb_tiles\\GBM664_S5_Scan1_x043008_y109568_RGB.tif",
+    "quantitative_layout": "CHW",
+    "quantitative_shape": [
+      3,
+      1024,
+      1024
+    ],
+    "manual_layout": "HWC",
+    "manual_shape": [
+      1024,
+      1024,
+      3
+    ],
+    "channel_names": [
+      "DAPI",
+      "Opal 620",
+      "Sample AF"
+    ],
+    "manual_equals_exported_rgb_array": true,
+    "manual_and_exported_rgb_sha256": "ec403fe7b7f079aa3bb2451c018bea95e992fa0f67e259e0638981f38c698825",
+    "quantitative_sha256": "75cafeaf3d492f5b7ab27f47c4aa49c40c6f588065d87814b5db85cd731bf747",
+    "reconstructed_rgb_mismatch_pixels": 0,
+    "spatial_and_content_match": true
+  },
+  {
+    "sample_id": "GBM664_S5_Scan1_x043008_y111616_RGB",
+    "quantitative_source": "annotation_workspace\\raw_exports\\GBM664_S5_full_export\\tiles\\GBM664_S5_Scan1_x043008_y111616.tif",
+    "manual_rgb_source": "annotation_workspace\\manual_annotations\\GFAP_morphology\\images\\GBM664_S5_Scan1_x043008_y111616_RGB.tif",
+    "exported_rgb_source": "annotation_workspace\\raw_exports\\GBM664_S5_full_export\\rgb_tiles\\GBM664_S5_Scan1_x043008_y111616_RGB.tif",
+    "quantitative_layout": "CHW",
+    "quantitative_shape": [
+      3,
+      1024,
+      1024
+    ],
+    "manual_layout": "HWC",
+    "manual_shape": [
+      1024,
+      1024,
+      3
+    ],
+    "channel_names": [
+      "DAPI",
+      "Opal 620",
+      "Sample AF"
+    ],
+    "manual_equals_exported_rgb_array": true,
+    "manual_and_exported_rgb_sha256": "d170df073f03e972cf047cea59ce369bafda51405e3ccf5c97dd3dd5068e579d",
+    "quantitative_sha256": "32bbc241786f7c3712bbf17c3f46896b5ab91da0635a3f18b3fedb15d5a7f64e",
+    "reconstructed_rgb_mismatch_pixels": 0,
+    "spatial_and_content_match": true
+  },
+  {
+    "sample_id": "GBM664_S5_Scan1_x044032_y110592_RGB",
+    "quantitative_source": "annotation_workspace\\raw_exports\\GBM664_S5_full_export\\tiles\\GBM664_S5_Scan1_x044032_y110592.tif",
+    "manual_rgb_source": "annotation_workspace\\manual_annotations\\GFAP_morphology\\images\\GBM664_S5_Scan1_x044032_y110592_RGB.tif",
+    "exported_rgb_source": "annotation_workspace\\raw_exports\\GBM664_S5_full_export\\rgb_tiles\\GBM664_S5_Scan1_x044032_y110592_RGB.tif",
+    "quantitative_layout": "CHW",
+    "quantitative_shape": [
+      3,
+      1024,
+      1024
+    ],
+    "manual_layout": "HWC",
+    "manual_shape": [
+      1024,
+      1024,
+      3
+    ],
+    "channel_names": [
+      "DAPI",
+      "Opal 620",
+      "Sample AF"
+    ],
+    "manual_equals_exported_rgb_array": true,
+    "manual_and_exported_rgb_sha256": "9d18e18205c3a5eb12a57392b2c4038d84d3f7551d9de1ee20441609a3b62b8d",
+    "quantitative_sha256": "a7b181520e2af045b9c741e6c177b7f071267884bcdadec4c6e09fad59438453",
+    "reconstructed_rgb_mismatch_pixels": 0,
+    "spatial_and_content_match": true
+  },
+  {
+    "sample_id": "GBM664_S5_Scan1_x047104_y115712_RGB",
+    "quantitative_source": "annotation_workspace\\raw_exports\\GBM664_S5_full_export\\tiles\\GBM664_S5_Scan1_x047104_y115712.tif",
+    "manual_rgb_source": "annotation_workspace\\manual_annotations\\GFAP_morphology\\images\\GBM664_S5_Scan1_x047104_y115712_RGB.tif",
+    "exported_rgb_source": "annotation_workspace\\raw_exports\\GBM664_S5_full_export\\rgb_tiles\\GBM664_S5_Scan1_x047104_y115712_RGB.tif",
+    "quantitative_layout": "CHW",
+    "quantitative_shape": [
+      3,
+      1024,
+      1024
+    ],
+    "manual_layout": "HWC",
+    "manual_shape": [
+      1024,
+      1024,
+      3
+    ],
+    "channel_names": [
+      "DAPI",
+      "Opal 620",
+      "Sample AF"
+    ],
+    "manual_equals_exported_rgb_array": true,
+    "manual_and_exported_rgb_sha256": "efb1f47d5664b043e8df59fbced6831e0a269380eb75896cd067dfcbb8ef7491",
+    "quantitative_sha256": "b4fe6ebf0a60d1f2d605a9efc9f8311cbc60bda5376c4a712b481f889972fb48",
+    "reconstructed_rgb_mismatch_pixels": 0,
+    "spatial_and_content_match": true
+  },
+  {
+    "sample_id": "GBM664_S5_Scan1_x049152_y118784_RGB",
+    "quantitative_source": "annotation_workspace\\raw_exports\\GBM664_S5_full_export\\tiles\\GBM664_S5_Scan1_x049152_y118784.tif",
+    "manual_rgb_source": "annotation_workspace\\manual_annotations\\GFAP_morphology\\images\\GBM664_S5_Scan1_x049152_y118784_RGB.tif",
+    "exported_rgb_source": "annotation_workspace\\raw_exports\\GBM664_S5_full_export\\rgb_tiles\\GBM664_S5_Scan1_x049152_y118784_RGB.tif",
+    "quantitative_layout": "CHW",
+    "quantitative_shape": [
+      3,
+      1024,
+      1024
+    ],
+    "manual_layout": "HWC",
+    "manual_shape": [
+      1024,
+      1024,
+      3
+    ],
+    "channel_names": [
+      "DAPI",
+      "Opal 620",
+      "Sample AF"
+    ],
+    "manual_equals_exported_rgb_array": true,
+    "manual_and_exported_rgb_sha256": "c849df9ba611a6b1f10b5afadf4bda92422629027c01ff1ae15e7dee55a4e8a9",
+    "quantitative_sha256": "46f71aec829fa70045e6bc1d62f2fbe62aae13407b37749255f0017ea4911458",
+    "reconstructed_rgb_mismatch_pixels": 0,
+    "spatial_and_content_match": true
+  }
+]

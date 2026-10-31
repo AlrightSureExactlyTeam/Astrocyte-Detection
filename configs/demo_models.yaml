@@ -15,7 +15,7 @@ models:
       candidate_cell_instances: positive_integer_ids
       candidate_nucleus_instances: positive_integer_ids
     cached:
-      run_dir: results/gfap_comparison/run_20261030T092041
+      run_dir: demo_assets
       mask_pattern: cellpose/{sample_id}/pred_001/cell_mask.tif
       nucleus_pattern: cellpose/{sample_id}/pred_001/nucleus_mask.tif
       overlay_pattern: cellpose/overlays/{sample_id}/pred_001_overlay.png
@@ -36,7 +36,7 @@ models:
       soma: 1
       process: 2
     cached:
-      run_dir: results/gfap_unet_pilots/V1_manual/run_20261030T074205_386731_f1d056
+      run_dir: demo_assets/unet_v1
       config: config_snapshot.yaml
       mask_pattern: predictions/{sample_id}/semantic_mask.tif
       overlay_pattern: predictions/{sample_id}/prediction_overlay.png
@@ -59,7 +59,7 @@ models:
       soma: 1
       process: 2
     cached:
-      run_dir: results/gfap_unet_pilots/V2_ImageJ_assisted/run_20261030T074250_515089_5af405
+      run_dir: demo_assets/unet_v2
       config: config_snapshot.yaml
       mask_pattern: predictions/{sample_id}/semantic_mask.tif
       overlay_pattern: predictions/{sample_id}/prediction_overlay.png
@@ -88,8 +88,8 @@ models:
       rejected: 4
       soma_and_assigned_process_instances: original_cellpose_ids
     cached:
-      run_dir: results/gfap_v33b2/pilot_20261031_v33b2_unified_v5
-      source_pattern: annotation_workspace/manual_annotations/GFAP_morphology/images/{sample_id}.tif
+      run_dir: demo_assets/v33b2
+      source_pattern: demo_assets/v33b2/images/{sample_id}.tif
       source_manifest: pilot_source_manifest.csv
       mask_pattern: predictions/{sample_id}/v33b2_unified/integrated_instance_mask.tif
       overlay_pattern: predictions/{sample_id}/v33b2_unified/final_integrated_overlay.png

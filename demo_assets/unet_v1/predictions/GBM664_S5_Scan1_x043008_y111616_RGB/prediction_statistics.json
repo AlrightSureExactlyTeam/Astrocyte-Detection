@@ -1,0 +1,36 @@
+{
+  "sample_id": "GBM664_S5_Scan1_x043008_y111616_RGB",
+  "source_sha256": "d170df073f03e972cf047cea59ce369bafda51405e3ccf5c97dd3dd5068e579d",
+  "original_shape": [
+    1024,
+    1024
+  ],
+  "reconstructed_probability_shape": [
+    3,
+    1024,
+    1024
+  ],
+  "finite_probabilities": true,
+  "probabilities_sum_to_one": true,
+  "alignment_verified": true,
+  "inference_seconds": 0.449,
+  "predicted_pixel_counts": {
+    "background": 42843,
+    "soma": 126677,
+    "process": 879056
+  },
+  "predicted_pixel_fractions": {
+    "background": 0.04085826873779297,
+    "soma": 0.12080860137939453,
+    "process": 0.8383331298828125
+  },
+  "classes_present": [
+    "background",
+    "soma",
+    "process"
+  ],
+  "dominant_class": "process",
+  "dominant_fraction": 0.8383331298828125,
+  "exact_single_class_collapse": false,
+  "dominance_warning_95_percent": false
+}

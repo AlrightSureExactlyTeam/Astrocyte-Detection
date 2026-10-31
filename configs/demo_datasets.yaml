@@ -14,9 +14,9 @@ datasets:
     source_description: Weak GFAP foreground only; negative pixels are not confirmed background.
     version: validated-2026-10-30
 comparison:
-  run_dir: results/gfap_comparison/run_20261030T092041
+  run_dir: demo_assets/comparison
   source_verification: source_verification.json
-  source_pattern: annotation_workspace/raw_exports/GBM664_S5_full_export/tiles/{source_stem}.tif
+  source_pattern: demo_assets/images/{source_stem}.tif
   manual_pattern: annotation_workspace/dataset_validation/GFAP_training/run_20261030T064103_082398_all_4abc72/labels/manual/{sample_id}.tif
   summary_csv: summary.csv
   aggregate_csv: aggregate_summary.csv

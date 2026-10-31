@@ -1,0 +1,40 @@
+{
+  "sample_id": "GBM664_S5_Scan1_x044032_y110592_RGB",
+  "created_utc": "2026-10-30T09:23:38.894625+00:00",
+  "review_status": "unverified",
+  "ground_truth": false,
+  "source_sha256": "a7b181520e2af045b9c741e6c177b7f071267884bcdadec4c6e09fad59438453",
+  "model_sha256": "e1440429eb384f95afe32bcba6510f90d518eaedc917ede549bed6804004abe2",
+  "model_type": "pretrained",
+  "cellpose_version": "4.2.1.1",
+  "gpu_requested": true,
+  "cell_channel_index": 1,
+  "nucleus_channel_index": 0,
+  "cell_normalization": {
+    "method": "percentile_clip",
+    "low_percentile": 1.0,
+    "high_percentile": 99.8,
+    "low": 7.0,
+    "high": 255.0,
+    "fallback_to_max_when_sparse": true
+  },
+  "nucleus_normalization": {
+    "method": "percentile_clip",
+    "low_percentile": 1.0,
+    "high_percentile": 99.8,
+    "low": 10.0,
+    "high": 255.0,
+    "fallback_to_max_when_sparse": true
+  },
+  "parameters": {
+    "cell_diameter": null,
+    "nucleus_diameter": null,
+    "min_size": 15,
+    "max_size_fraction": 0.4,
+    "flow_threshold": 0.4,
+    "cellprob_threshold": 0.0,
+    "cellpose_normalize": false
+  },
+  "candidate_cell_count": 37,
+  "candidate_nucleus_count": 83
+}

@@ -14,6 +14,9 @@ models:
       background: 0
       candidate_cell_instances: positive_integer_ids
       candidate_nucleus_instances: positive_integer_ids
+    deployment:
+      cloud_enabled: false
+      cloud_disabled_reason: Cellpose CPSAM Live inference is disabled on Streamlit Community Cloud because its CPU and memory requirements have not been validated. Existing Results remain available.
     cached:
       run_dir: demo_assets
       mask_pattern: cellpose/{sample_id}/pred_001/cell_mask.tif
@@ -35,6 +38,14 @@ models:
       background: 0
       soma: 1
       process: 2
+    deployment:
+      cloud_enabled: true
+      checkpoint_url_env: ASTROCYTE_UNET_V1_CHECKPOINT_URL
+      config_url_env: ASTROCYTE_UNET_V1_CONFIG_URL
+      checkpoint_sha256: 89c9fcc3fbd244970928f62f9e29188996273abb020c0c237a250d7667964ae3
+      checkpoint_size_bytes: 172040459
+      config_sha256: 391bd117f89c9a3caca8f9218396ea0d782837a048fbd0b00724db8e02f660b0
+      config_size_bytes: 1573
     cached:
       run_dir: demo_assets/unet_v1
       config: config_snapshot.yaml
@@ -58,6 +69,14 @@ models:
       background: 0
       soma: 1
       process: 2
+    deployment:
+      cloud_enabled: true
+      checkpoint_url_env: ASTROCYTE_UNET_V2_CHECKPOINT_URL
+      config_url_env: ASTROCYTE_UNET_V2_CONFIG_URL
+      checkpoint_sha256: de8b49e0ec570a0271bca3278b3364e9cbf47b50ff85672df89180b3c16abd0e
+      checkpoint_size_bytes: 172041227
+      config_sha256: e3ff4f6f1cb7dd835c09034700bbe58691f8531009a24c4418786e27b2d79eb9
+      config_size_bytes: 2239
     cached:
       run_dir: demo_assets/unet_v2
       config: config_snapshot.yaml
@@ -87,6 +106,9 @@ models:
       unassigned: 3
       rejected: 4
       soma_and_assigned_process_instances: original_cellpose_ids
+    deployment:
+      cloud_enabled: false
+      cloud_disabled_reason: V3.3-B.2 Live inference is disabled on Streamlit Community Cloud because its combined CPSAM, V3, and association pipeline has not been validated within Cloud CPU and memory limits. Existing Results remain available.
     cached:
       run_dir: demo_assets/v33b2
       source_pattern: demo_assets/v33b2/images/{sample_id}.tif

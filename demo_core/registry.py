@@ -7,6 +7,8 @@ from typing import Any
 
 import yaml
 
+from .weights import is_streamlit_cloud, local_unet_ready, remote_unet_configured
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FIELDS = {
     "id", "name", "model_type", "checkpoint", "inference_adapter",
@@ -26,11 +28,18 @@ class ModelSpec:
     output_label_mapping: dict[str, Any]
     version: str
     cached: dict[str, Any]
+    deployment: dict[str, Any]
     enabled: bool = True
 
     @property
     def live_available(self) -> bool:
-        return self.enabled and self.inference_adapter in SUPPORTED_ADAPTERS and self.checkpoint.is_file()
+        if not self.enabled or self.inference_adapter not in SUPPORTED_ADAPTERS:
+            return False
+        if is_streamlit_cloud() and not self.deployment.get("cloud_enabled", False):
+            return False
+        if self.inference_adapter == "unet":
+            return local_unet_ready(self) or (is_streamlit_cloud() and remote_unet_configured(self))
+        return self.checkpoint.is_file()
 
     @property
     def unavailable_reason(self) -> str | None:
@@ -38,6 +47,21 @@ class ModelSpec:
             return "Disabled in the model registry."
         if self.inference_adapter not in SUPPORTED_ADAPTERS:
             return f"No installed live adapter named {self.inference_adapter!r}."
+        if is_streamlit_cloud() and not self.deployment.get("cloud_enabled", False):
+            return self.deployment.get(
+                "cloud_disabled_reason",
+                "Live inference is disabled on Streamlit Community Cloud. Existing Results remain available.",
+            )
+        if self.inference_adapter == "unet" and not local_unet_ready(self):
+            if is_streamlit_cloud():
+                if not remote_unet_configured(self):
+                    names = [
+                        self.deployment.get("checkpoint_url_env", "checkpoint URL"),
+                        self.deployment.get("config_url_env", "config URL"),
+                    ]
+                    return f"U-Net Live inference is not configured; set {', '.join(names)} in Streamlit secrets."
+                return None
+            return f"U-Net checkpoint/config not found beside: {self.checkpoint.parent.parent}"
         if not self.checkpoint.is_file():
             return f"Checkpoint/model file not found: {self.checkpoint}"
         return None
@@ -77,6 +101,7 @@ def load_model_registry(path: str | Path = PROJECT_ROOT / "configs/demo_models.y
             output_label_mapping=dict(entry["output_label_mapping"]),
             version=str(entry["version"]),
             cached=dict(entry.get("cached") or {}),
+            deployment=dict(entry.get("deployment") or {}),
             enabled=bool(entry.get("enabled", True)),
         ))
     return specs

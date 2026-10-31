@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from .images import encode_png, semantic_overlay, validate_for_model
 from .registry import ModelSpec, PROJECT_ROOT
 from .reports import new_run_directory, write_json
 from .results import DemoResult
+from .weights import cloud_inference_guard, ensure_unet_checkpoint
 
 
 def _write_png_new(path: Path, image: np.ndarray) -> None:
@@ -43,17 +45,20 @@ def run_live_inference(
     if not model.live_available:
         raise RuntimeError(model.unavailable_reason or "Model is unavailable")
     validate_for_model(image, model.expected_input)
-    run_dir = new_run_directory(output_root)
-    if model.inference_adapter == "cellpose":
-        result = _run_cellpose(image, sample_id, model, run_dir)
-    elif model.inference_adapter == "unet":
-        result = _run_unet(image, sample_id, model, run_dir, device_name)
-    elif model.inference_adapter == "v33b2":
-        from .v33b2_adapter import run_v33b2_inference
-        result = run_v33b2_inference(image, sample_id, model, run_dir, device_name)
-    else:
-        raise RuntimeError(f"No live adapter for {model.inference_adapter}")
-    return result, run_dir
+    with cloud_inference_guard():
+        if model.inference_adapter == "unet":
+            model = replace(model, checkpoint=ensure_unet_checkpoint(model))
+        run_dir = new_run_directory(output_root)
+        if model.inference_adapter == "cellpose":
+            result = _run_cellpose(image, sample_id, model, run_dir)
+        elif model.inference_adapter == "unet":
+            result = _run_unet(image, sample_id, model, run_dir, device_name)
+        elif model.inference_adapter == "v33b2":
+            from .v33b2_adapter import run_v33b2_inference
+            result = run_v33b2_inference(image, sample_id, model, run_dir, device_name)
+        else:
+            raise RuntimeError(f"No live adapter for {model.inference_adapter}")
+        return result, run_dir
 
 
 def _run_cellpose(image: np.ndarray, sample_id: str, model: ModelSpec, run_dir: Path) -> DemoResult:

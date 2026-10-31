@@ -120,6 +120,8 @@ def _process_png(data: bytes, filename: str, media_type: str, suffix: str) -> Cr
             with Image.open(io.BytesIO(data)) as opened:
                 if getattr(opened, "n_frames", 1) != 1:
                     raise ImageValidationError("暂不支持多帧 PNG/APNG，以免静默丢弃页面。")
+                width, height = opened.size
+                out_width, out_height = _target_size(width, height)
                 opened.load()
                 image = opened.copy()
                 info = dict(opened.info)
@@ -130,7 +132,6 @@ def _process_png(data: bytes, filename: str, media_type: str, suffix: str) -> Cr
         raise ImageValidationError(f"PNG 解码失败：{exc}") from exc
 
     width, height = image.size
-    out_width, out_height = _target_size(width, height)
     channels = len(image.getbands())
     dtype = np.asarray(image).dtype.str
     output_name = _safe_output_name(filename, suffix)
@@ -193,16 +194,17 @@ def _process_tiff(data: bytes, filename: str, media_type: str, suffix: str) -> C
                 )
             page = tif.pages[0]
             series = tif.series[0]
-            array = series.asarray()
             axes = series.axes
-            if len(array.shape) not in {2, 3} or any(axis not in "YXSC" for axis in axes) \
+            shape = series.shape
+            if len(shape) not in {2, 3} or any(axis not in "YXSC" for axis in axes) \
                     or "Y" not in axes or "X" not in axes:
-                raise ImageValidationError(f"暂不支持轴结构为 {axes}、形状为 {array.shape} 的特殊 TIFF。")
-            height = array.shape[axes.index("Y")]
-            width = array.shape[axes.index("X")]
+                raise ImageValidationError(f"暂不支持轴结构为 {axes}、形状为 {shape} 的特殊 TIFF。")
+            height = shape[axes.index("Y")]
+            width = shape[axes.index("X")]
             channel_axis = "S" if "S" in axes else "C" if "C" in axes else None
-            channels = array.shape[axes.index(channel_axis)] if channel_axis else 1
+            channels = shape[axes.index(channel_axis)] if channel_axis else 1
             out_width, out_height = _target_size(width, height)
+            array = series.asarray()
             dtype = array.dtype.str
             output_name = _safe_output_name(filename, suffix)
             if (width, height) == (out_width, out_height):

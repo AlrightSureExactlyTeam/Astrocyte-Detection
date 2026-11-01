@@ -31,9 +31,8 @@ def prepare_upload_cached(filename: str, content: bytes):
     return prepare_upload(content, filename)
 
 
-@st.cache_resource(max_entries=4)
 def get_sciencepal_client() -> SciencePalClient:
-    """Reuse only the lightweight wrapper; each request owns its async SDK client."""
+    """Build a fresh lightweight wrapper so deployments never reuse stale code."""
     return SciencePalClient()
 
 

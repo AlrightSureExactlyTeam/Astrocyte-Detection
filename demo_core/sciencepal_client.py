@@ -331,4 +331,27 @@ class SciencePalClient:
             "are not confirmed background, and ImageJ masks are weak foreground labels. Explicitly consider "
             "foreground overprediction and the preliminary in-sample scope. Do not invent missing metrics."
         )
-        return self.chat(prompt, attachments=attachments or None)[0]
+        answer, thread_id = self.chat(prompt, attachments=attachments or None)
+        if self._is_delivery_status(answer):
+            if not thread_id:
+                raise SciencePalError("SciencePal returned a delivery status without a usable conversation")
+            correction = (
+                "Your previous response was only a delivery status, not the requested analysis. A file path "
+                "or confirmation that a report was written does not answer the research question. Do not call "
+                "any tools and do not create or update any files. Output only the complete preliminary QC "
+                "analysis in this final assistant message. Start with '## Measured results' and include the "
+                "actual supplied numbers, arithmetic derivations, interpretation, uncertainties or missing "
+                "evidence, recommendations, and research-document citations. Use these same measurements:\n"
+                + json.dumps(safe, indent=2, ensure_ascii=False)
+            )
+            answer, _ = self.chat(correction, thread_id=thread_id)
+        if self._is_delivery_status(answer):
+            raise SciencePalError("SciencePal returned only a delivery status instead of the QC analysis")
+        return answer
+
+    @staticmethod
+    def _is_delivery_status(text: str) -> bool:
+        """Reject short run/delivery summaries that contain no scientific analysis."""
+        lowered = text.lower()
+        evidence_markers = ("assigned", "measured", "uncertaint", "missing evidence")
+        return not any(marker in lowered for marker in evidence_markers)

@@ -249,6 +249,39 @@ def test_sciencepal_without_credentials(monkeypatch):
         SciencePalClient()
 
 
+def test_sciencepal_analysis_corrects_delivery_only_response(monkeypatch):
+    client = configured_mock_client(monkeypatch)
+    calls = []
+
+    def fake_chat(prompt, thread_id=None, attachments=None):
+        calls.append((prompt, thread_id, attachments))
+        if thread_id is None:
+            return "The task is complete. The report was written to a file.", "mock-analysis-thread"
+        return (
+            "## Measured results\nAssigned pixels: 3.\n"
+            "## Interpretation\nUnverified candidates only.\n"
+            "## Uncertainties and missing evidence\nNo confirmed negatives."
+        ), thread_id
+
+    monkeypatch.setattr(client, "chat", fake_chat)
+    answer = client.analyze_results({"candidate_cell_count": 3}, model_id="v33b2", mode="cached")
+    assert answer.startswith("## Measured results")
+    assert len(calls) == 2
+    assert calls[1][1] == "mock-analysis-thread"
+    assert "Do not call any tools" in calls[1][0]
+    assert "candidate_cell_count" in calls[1][0]
+
+
+def test_sciencepal_analysis_rejects_repeated_delivery_status(monkeypatch):
+    client = configured_mock_client(monkeypatch)
+    monkeypatch.setattr(
+        client, "chat",
+        lambda *args, **kwargs: ("The task is complete; no action is needed.", "mock-thread"),
+    )
+    with pytest.raises(SciencePalError, match="only a delivery status"):
+        client.analyze_results({"candidate_cell_count": 3}, model_id="v33b2", mode="cached")
+
+
 def test_report_has_scientific_limits():
     result = load_cached_result(available_samples()[0], get_model("unet_v2"))
     report = report_markdown(result)

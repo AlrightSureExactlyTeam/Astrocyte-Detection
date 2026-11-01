@@ -230,6 +230,22 @@ class SciencePalClient:
 
         return _run_async(operation)
 
+    def _kb_options(self) -> dict[str, Any]:
+        """Optional knowledge-base binding; values come from env, never from code."""
+        dataset_ids = os.environ.get("SCIENCEPAL_KB_DATASET_IDS", "").strip()
+        if not dataset_ids:
+            return {}
+        options: dict[str, Any] = {
+            "dataset_ids": [item.strip() for item in dataset_ids.split(",") if item.strip()],
+        }
+        kb_url = os.environ.get("SCIENCEPAL_KB_URL", "").strip()
+        kb_api_key = os.environ.get("SCIENCEPAL_KB_API_KEY", "").strip()
+        if kb_url:
+            options["kb_url"] = kb_url
+        if kb_api_key:
+            options["kb_api_key"] = kb_api_key
+        return options
+
     async def _stream_request(
         self, client: Any, prompt: str, thread_id: str | None = None,
     ) -> tuple[str, str | None]:
@@ -242,7 +258,13 @@ class SciencePalClient:
                 raise SciencePalError("Installed SciencePal SDK does not support contextual chat") from exc
             run = await client.runs.start(thread_id, request)
         else:
-            run = await client.runs.initiate(agent_id=self.agent_id, prompt=prompt)
+            kb_options = self._kb_options()
+            try:
+                run = await client.runs.initiate(agent_id=self.agent_id, prompt=prompt, **kb_options)
+            except TypeError as exc:
+                raise SciencePalError(
+                    "Installed SciencePal SDK does not support knowledge-base options"
+                ) from exc
         run_id = getattr(run, "agent_run_id", None) or (run.get("agent_run_id") if isinstance(run, dict) else None)
         if not run_id:
             raise SciencePalError("SciencePal did not return an agent_run_id")

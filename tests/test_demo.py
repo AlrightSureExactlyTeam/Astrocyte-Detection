@@ -111,8 +111,7 @@ def test_upload_validation_and_model_contract():
         read_upload("image.jpg", b"not an image")
     with pytest.raises(ValueError, match="Could not validate"):
         read_upload("broken.png", b"not an image")
-    with pytest.raises(ValueError, match="divisible by 256"):
-        validate_for_model(np.zeros((100, 100, 2), dtype=np.uint8), {"min_channels": 2, "spatial_divisor": 256})
+    validate_for_model(np.zeros((100, 100, 2), dtype=np.uint8), {"min_channels": 2, "patch_size": 256})
     with pytest.raises(ValueError, match="at least 2 channels"):
         validate_for_model(np.zeros((256, 256), dtype=np.uint8), {"min_channels": 2})
 

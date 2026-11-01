@@ -20,16 +20,17 @@ def tiff_bytes(array: np.ndarray, **kwargs) -> bytes:
     return buffer.getvalue()
 
 
-def test_png_is_cropped_top_left_without_resampling():
+def test_png_preserves_nonmultiple_dimensions_without_resampling():
     array = np.arange(517 * 300 * 3, dtype=np.uint32).reshape(517, 300, 3).astype(np.uint8)
-    result = prepare_upload(png_bytes(array), "cells.png")
-    assert result.status == "cropped"
-    assert (result.output_width, result.output_height) == (256, 512)
-    assert (result.removed_right, result.removed_bottom) == (44, 5)
-    assert result.filename == "cells_crop256.png" and result.verified
+    content = png_bytes(array)
+    result = prepare_upload(content, "cells.png")
+    assert result.status == "unchanged" and result.data == content
+    assert (result.output_width, result.output_height) == (300, 517)
+    assert (result.removed_right, result.removed_bottom) == (0, 0)
+    assert result.filename == "cells.png" and result.verified
     with Image.open(io.BytesIO(result.data)) as output:
         assert output.mode == "RGB"
-        np.testing.assert_array_equal(np.asarray(output), array[:512, :256])
+        np.testing.assert_array_equal(np.asarray(output), array)
 
 
 def test_compliant_png_uses_original_verified_bytes():
@@ -41,10 +42,10 @@ def test_compliant_png_uses_original_verified_bytes():
 
 def test_uint16_png_preserves_bit_depth_and_pixels():
     array = np.arange(300 * 300, dtype=np.uint16).reshape(300, 300)
-    result = prepare_upload(png_bytes(array, mode="I;16"), "depth16.png")
+    result = prepare_upload(png_bytes(array), "depth16.png")
     with Image.open(io.BytesIO(result.data)) as output:
         assert output.mode == "I;16"
-        np.testing.assert_array_equal(np.asarray(output), array[:256, :256])
+        np.testing.assert_array_equal(np.asarray(output), array)
 
 
 def test_multichannel_tiff_preserves_dtype_channels_resolution_and_pixels():
@@ -56,9 +57,9 @@ def test_multichannel_tiff_preserves_dtype_channels_resolution_and_pixels():
     assert result.channels == 3 and result.dtype == np.dtype(np.uint16).str
     with tifffile.TiffFile(io.BytesIO(result.data)) as tif:
         output = tif.pages[0].asarray()
-        assert output.shape == (256, 256, 3) and output.dtype == np.uint16
+        assert output.shape == (300, 300, 3) and output.dtype == np.uint16
         assert tif.pages[0].tags["XResolution"].value == (300, 1)
-        np.testing.assert_array_equal(output, array[:256, :256])
+        np.testing.assert_array_equal(output, array)
 
 
 def test_cyx_tiff_is_not_reinterpreted_or_dropped():
@@ -70,7 +71,7 @@ def test_cyx_tiff_is_not_reinterpreted_or_dropped():
     with tifffile.TiffFile(io.BytesIO(result.data)) as tif:
         output = tif.pages[0].asarray()
         assert tif.series[0].axes == "CYX"
-        np.testing.assert_array_equal(output, array[:, :256, :256])
+        np.testing.assert_array_equal(output, array)
 
 
 def test_multipage_tiff_is_rejected_without_silent_page_loss():
@@ -82,9 +83,11 @@ def test_multipage_tiff_is_rejected_without_silent_page_loss():
         prepare_upload(buffer.getvalue(), "stack.tif")
 
 
-def test_too_small_fake_suffix_and_non_image_are_rejected():
-    with pytest.raises(ImageValidationError, match="至少为 256"):
-        prepare_upload(png_bytes(np.zeros((255, 256), dtype=np.uint8)), "small.png")
+def test_small_images_are_retained_and_fake_files_are_rejected():
+    content = png_bytes(np.zeros((255, 256), dtype=np.uint8))
+    result = prepare_upload(content, "small.png")
+    assert result.status == "unchanged" and result.data == content
+    assert (result.output_width, result.output_height) == (256, 255)
     with pytest.raises(ImageValidationError, match="真实格式不一致"):
         prepare_upload(png_bytes(np.zeros((256, 256), dtype=np.uint8)), "fake.tif")
     with pytest.raises(ImageValidationError, match="不能仅通过修改后缀"):

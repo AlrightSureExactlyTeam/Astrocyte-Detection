@@ -59,12 +59,6 @@ def validate_for_model(image: np.ndarray, expected_input: dict) -> None:
     minimum = int(expected_input.get("min_channels", 1))
     if channels < minimum:
         raise ValueError(f"This model requires at least {minimum} channels; the image has {channels}")
-    divisor = int(expected_input.get("spatial_divisor", 1))
-    if divisor > 1 and (image.shape[0] % divisor or image.shape[1] % divisor):
-        raise ValueError(
-            f"Image height and width must be divisible by {divisor} for patch inference; "
-            f"got {image.shape[:2]}. No resizing is performed."
-        )
 
 
 def display_image(image: np.ndarray, channel: int | None = 1) -> np.ndarray:

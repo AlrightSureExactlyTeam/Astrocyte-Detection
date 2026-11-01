@@ -1,16 +1,11 @@
 """Deployable U-Net inference runtime for Streamlit Cloud Live inference.
 
-The functions below are verbatim copies of the validated implementations in
-the local-only annotation workspace (annotation_workspace is not deployed):
-
-- validate_pilot_config / load_pilot_config
-  <- annotation_workspace/gfap_annotation/pilot_training.py
-- display_image / load_checkpoint / predict_tile / prediction_statistics
-  <- annotation_workspace/tools/compare_unet_pilots.py
-
-Only the import locations changed; no algorithm, architecture, or weight
-logic was modified. Model construction and image preprocessing still come
-from the in-repo src package (src.train, src.preprocessing).
+These deployable functions originated from the validated annotation-workspace
+implementations. Model construction, GFAP channel selection, normalization,
+softmax, checkpoint loading, and output statistics retain their existing rules.
+Patch inference additionally supports edge padding and original-size cropping.
+Model construction and image preprocessing come from src.train and
+src.preprocessing.
 """
 from __future__ import annotations
 
@@ -110,27 +105,43 @@ def load_checkpoint(run_dir: Path, device: torch.device):
     return model, config, checkpoint
 
 
-def predict_tile(model, raw: np.ndarray, device: torch.device, patch_size: int = 256, batch_size: int = 4) -> np.ndarray:
+def predict_tile(model, raw: np.ndarray, device: torch.device, patch_size: int = 256, batch_size: int = 1) -> np.ndarray:
+    """Predict non-overlapping patches, padding only the incomplete edge patches."""
+    if not isinstance(patch_size, (int, np.integer)) or patch_size <= 0:
+        raise ValueError("patch_size must be a positive integer")
+    if not isinstance(batch_size, (int, np.integer)) or batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
     height, width = raw.shape[:2]
-    if height % patch_size or width % patch_size:
-        raise ValueError(f"Tile shape {raw.shape} is not divisible by {patch_size}")
-    patches, coordinates = [], []
-    for y in range(0, height, patch_size):
-        for x in range(0, width, patch_size):
-            patch = prepare_image(raw[y:y + patch_size, x:x + patch_size], channel=1)
-            patches.append(patch)
-            coordinates.append((x, y))
+    coordinates = [
+        (x, y)
+        for y in range(0, height, patch_size)
+        for x in range(0, width, patch_size)
+    ]
     probabilities = np.empty((3, height, width), dtype=np.float32)
     with torch.no_grad():
-        for start in range(0, len(patches), batch_size):
-            batch = torch.stack(patches[start:start + batch_size]).to(device)
+        for start in range(0, len(coordinates), batch_size):
+            batch_coordinates = coordinates[start:start + batch_size]
+            patches = []
+            for x, y in batch_coordinates:
+                patch = raw[y:min(y + patch_size, height), x:min(x + patch_size, width)]
+                padding = [(0, patch_size - patch.shape[0]), (0, patch_size - patch.shape[1])]
+                if raw.ndim == 3:
+                    padding.append((0, 0))
+                if patch.shape[:2] != (patch_size, patch_size):
+                    patch = np.pad(patch, padding, mode="edge")
+                patches.append(prepare_image(patch, channel=1))
+            batch = torch.stack(patches).to(device)
             outputs = model(batch)
             logits = outputs["semantic_logits"]
             if logits.shape != (batch.shape[0], 3, patch_size, patch_size) or not torch.isfinite(logits).all():
                 raise RuntimeError("Invalid or non-finite semantic logits")
             batch_probability = torch.softmax(logits, dim=1).cpu().numpy()
-            for offset, (x, y) in enumerate(coordinates[start:start + batch_size]):
-                probabilities[:, y:y + patch_size, x:x + patch_size] = batch_probability[offset]
+            for offset, (x, y) in enumerate(batch_coordinates):
+                valid_height = min(patch_size, height - y)
+                valid_width = min(patch_size, width - x)
+                probabilities[:, y:y + valid_height, x:x + valid_width] = (
+                    batch_probability[offset, :, :valid_height, :valid_width]
+                )
     if not np.isfinite(probabilities).all():
         raise RuntimeError("Non-finite stitched probabilities")
     if not np.allclose(probabilities.sum(axis=0), 1.0, atol=1e-5):

@@ -27,7 +27,7 @@ st.set_page_config(page_title="Astrocyte Detection Demo", page_icon="🔬", layo
 
 @st.cache_data(max_entries=1, show_spinner=False)
 def prepare_upload_cached(filename: str, content: bytes):
-    """Avoid repeating lossless crop and verification on every Streamlit rerun."""
+    """Avoid repeating image validation on every Streamlit rerun."""
     return prepare_upload(content, filename)
 
 
@@ -59,26 +59,18 @@ with st.sidebar:
     else:
         uploaded = st.file_uploader("Original-resolution image", type=["png", "tif", "tiff"])
         sample_id = Path(uploaded.name).stem if uploaded else "upload"
-        st.caption("Validated copies keep the left/top pixels; only right/bottom edges are cropped to multiples of 256. No resizing or intensity conversion.")
+        st.caption("Original dimensions and intensities are retained. U-Net pads incomplete 256×256 edge patches internally.")
         if uploaded is not None:
             try:
                 upload_result = prepare_upload_cached(uploaded.name, uploaded.getvalue())
-                sample_id = Path(upload_result.filename).stem
-                if upload_result.cropped:
-                    st.success(
-                        f"Cropped and verified: {upload_result.original_width}×{upload_result.original_height} → "
-                        f"{upload_result.output_width}×{upload_result.output_height}"
-                    )
-                else:
-                    st.success(
-                        f"Already compatible: {upload_result.original_width}×{upload_result.original_height}; original bytes verified."
-                    )
+                st.success(
+                    f"Verified: {upload_result.original_width}×{upload_result.original_height}; original dimensions retained."
+                )
                 st.caption(
-                    f"Removed right {upload_result.removed_right}px · bottom {upload_result.removed_bottom}px · "
-                    f"{upload_result.source_format} · {upload_result.channels} channel(s) · pixel verification passed"
+                    f"{upload_result.source_format} · {upload_result.channels} channel(s) · no cropping or resizing"
                 )
                 st.download_button(
-                    "Download validated crop256 copy",
+                    "Download validated original copy",
                     data=upload_result.data,
                     file_name=upload_result.filename,
                     mime=upload_result.media_type,
@@ -122,13 +114,13 @@ if execute:
             input_metadata = {"source": "validated_project_sample", "image_path": str(image_path)}
         else:
             if upload_result is None:
-                raise ValueError("Upload validation did not produce a verified crop256 copy")
+                raise ValueError("Upload validation did not produce a verified original copy")
             image, input_metadata = read_upload(upload_result.filename, upload_result.data)
             input_metadata.update({
                 "source": "user_upload",
                 "original_filename": Path(uploaded.name).name,
-                "crop256": upload_result.to_dict(),
-                "content_modified": upload_result.cropped,
+                "upload_validation": upload_result.to_dict(),
+                "content_modified": False,
                 "resized": False,
             })
         validate_for_model(image, model.expected_input)

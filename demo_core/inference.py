@@ -129,7 +129,8 @@ def _run_unet(image: np.ndarray, sample_id: str, model: ModelSpec, run_dir: Path
     device = get_device(device_name)
     unet, config, checkpoint = load_checkpoint(run_source, device)
     try:
-        probabilities = predict_tile(unet, image, device)
+        patch_size = int(model.expected_input.get("patch_size", 256))
+        probabilities = predict_tile(unet, image, device, patch_size=patch_size, batch_size=1)
     finally:
         del unet
         if device.type == "cuda":
@@ -152,6 +153,7 @@ def _run_unet(image: np.ndarray, sample_id: str, model: ModelSpec, run_dir: Path
         "mode": "live", "model_id": model.id, "model_version": model.version,
         "checkpoint": str(checkpoint), "config_snapshot": str(run_source / "config_snapshot.yaml"),
         "device": str(device), "input_shape": list(image.shape),
+        "patch_size": patch_size, "patch_batch_size": 1, "edge_padding": "edge", "output_cropped_to_input": True,
         "preprocessing": "Existing per-patch percentile 1/99.8 normalization; GFAP channel 1; no resizing",
         "review_status": "unverified", "ground_truth": False,
     }

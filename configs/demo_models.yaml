@@ -33,7 +33,7 @@ models:
     expected_input:
       min_channels: 2
       cell_channel: 1
-      spatial_divisor: 256
+      patch_size: 256
     output_label_mapping:
       background: 0
       soma: 1
@@ -64,7 +64,7 @@ models:
     expected_input:
       min_channels: 2
       cell_channel: 1
-      spatial_divisor: 256
+      patch_size: 256
     output_label_mapping:
       background: 0
       soma: 1

@@ -1,4 +1,4 @@
-"""Deterministic PNG/TIFF upload validation and top-left cropping to multiples of 256."""
+"""Deterministic PNG/TIFF upload validation preserving original image dimensions."""
 from __future__ import annotations
 
 import io
@@ -53,9 +53,7 @@ class CropResult:
 
 
 def _safe_output_name(filename: str, suffix: str) -> str:
-    clean = Path(filename or "image").name
-    stem = Path(clean).stem or "image"
-    return f"{stem}_crop256{suffix}"
+    return Path(filename or f"image{suffix}").name
 
 
 def _detect_format(data: bytes, filename: str) -> tuple[str, str, str]:
@@ -78,13 +76,11 @@ def _detect_format(data: bytes, filename: str) -> tuple[str, str, str]:
 
 
 def _target_size(width: int, height: int) -> tuple[int, int]:
-    if width < TILE or height < TILE:
-        raise ImageValidationError(
-            f"图片为 {width}×{height}，宽和高都必须至少为 {TILE} 像素；不会放大或生成零尺寸图片。"
-        )
+    if width <= 0 or height <= 0:
+        raise ImageValidationError("图片宽和高必须为正数。")
     if width * height > MAX_PIXELS:
         raise ImageValidationError(f"解码后共有 {width * height:,} 个像素，超过 {MAX_PIXELS:,} 像素安全限制。")
-    return width // TILE * TILE, height // TILE * TILE
+    return width, height
 
 
 def _result(
@@ -190,7 +186,7 @@ def _process_tiff(data: bytes, filename: str, media_type: str, suffix: str) -> C
         with tifffile.TiffFile(io.BytesIO(data)) as tif:
             if len(tif.pages) != 1:
                 raise ImageValidationError(
-                    f"检测到 {len(tif.pages)} 页 TIFF；为避免静默丢页，暂不支持自动裁剪，请先拆分页面。"
+                    f"检测到 {len(tif.pages)} 页 TIFF；为避免静默丢页，暂不支持多页 TIFF，请先拆分页面。"
                 )
             page = tif.pages[0]
             series = tif.series[0]
@@ -260,7 +256,7 @@ def _process_tiff(data: bytes, filename: str, media_type: str, suffix: str) -> C
 
 
 def prepare_upload(data: bytes, filename: str) -> CropResult:
-    """Validate and crop one upload, returning only verified bytes for later analysis."""
+    """Validate one upload without cropping, resizing, or changing its bytes."""
     if not data:
         raise ImageValidationError("文件为空。")
     source_format, media_type, suffix = _detect_format(data, filename)

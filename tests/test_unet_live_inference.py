@@ -19,10 +19,11 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.parametrize("model_id", ["unet_v1", "unet_v2"])
-def test_real_unet_cpu_live_inference(model_id, tmp_path):
+@pytest.mark.parametrize("shape", [(256, 256), (1024, 1024), (1000, 850), (1024, 832)])
+def test_real_unet_cpu_live_inference(model_id, shape, tmp_path):
     model = get_model(model_id)
     cached = load_cached_result(available_samples()[0], model)
-    image = load_image(cached.image_path)[:256, :256].copy()
+    image = load_image(cached.image_path)[:shape[0], :shape[1]].copy()
 
     result, run_dir = run_live_inference(
         image, "local-cpu-test", model, output_root=tmp_path / "runs", device_name="cpu",
@@ -30,9 +31,10 @@ def test_real_unet_cpu_live_inference(model_id, tmp_path):
 
     assert result.mode == "live" and result.review_status == "unverified"
     assert result.statistics["finite_probabilities"] is True
-    assert tifffile.imread(result.mask_path).shape == (256, 256)
+    mask = tifffile.imread(result.mask_path)
+    assert mask.shape == shape
     assert result.overlay_path.is_file()
     assert result.artifacts["process_probability"].is_file()
     metadata = json.loads((run_dir / "input_metadata.json").read_text(encoding="utf-8"))
     assert metadata["device"] == "cpu"
-    assert metadata["input_shape"] == [256, 256, image.shape[2]]
+    assert metadata["input_shape"] == [shape[0], shape[1], image.shape[2]]

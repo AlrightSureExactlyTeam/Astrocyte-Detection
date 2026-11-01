@@ -333,8 +333,11 @@ else:
                 )
         except SciencePalError as exc:
             st.error(str(exc))
-        except Exception:
-            st.error("SciencePal analysis failed safely; local results and inference remain unchanged")
+        except Exception as exc:
+            st.error(
+                f"SciencePal analysis failed safely ({type(exc).__name__}); "
+                "local results and inference remain unchanged"
+            )
     analysis = st.session_state.get("analysis")
     if analysis:
         st.markdown(analysis)

@@ -100,7 +100,11 @@ def _github_asset_api_url(url: str, token: str) -> str:
             headers={"Authorization": f"Bearer {token}"},
             timeout=(10, 60),
         )
-        listing.raise_for_status()
+        if listing.status_code != 200:
+            raise RuntimeError(
+                f"GitHub release lookup failed with HTTP {listing.status_code} "
+                f"(401=invalid token, 404=token lacks repo access or SSO authorization)."
+            )
         for asset in listing.json().get("assets", []):
             _GITHUB_ASSET_ID_CACHE[f"{repo}@{tag}:{asset['name']}"] = asset["id"]
     if cache_key not in _GITHUB_ASSET_ID_CACHE:
@@ -171,6 +175,12 @@ def _download(url: str, destination: Path, expected_size: int, expected_sha256: 
         if size != expected_size or digest.hexdigest() != expected_sha256:
             raise RuntimeError(f"Downloaded {label} failed integrity verification; inference was not started.")
         os.replace(temporary, destination)
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        raise RuntimeError(
+            f"Could not download {label} (HTTP {status}). "
+            f"401=invalid token, 403=forbidden, 404=token lacks repo access or SSO authorization."
+        ) from None
     except (URLError, TimeoutError, OSError, requests.RequestException):
         raise RuntimeError(
             f"Could not download {label}. Check the configured storage and access permissions."

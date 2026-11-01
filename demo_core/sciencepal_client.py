@@ -318,6 +318,11 @@ class SciencePalClient:
         )
         prompt = (
             "Prepare a concise preliminary quality-control analysis for an astrocyte GFAP segmentation demo. "
+            "This is a standalone synchronous research question, not a project-management task. Do not create "
+            "or update branches, cards, tasks, or deliverable files, and do not call task-completion or "
+            "artifact-delivery tools. Return the complete analysis directly as assistant text, never a status "
+            "summary such as 'task finished'. Include measured facts, interpretation, uncertainties or missing "
+            "evidence, and actionable recommendations. "
             + evidence_note
             + "Use only these de-identified measurements for the current run:\n"
             + json.dumps(safe, indent=2, ensure_ascii=False)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -75,6 +76,38 @@ def _validate_url(url: str) -> None:
         raise ValueError("Weight URLs must use HTTPS; plain HTTP is allowed only for loopback tests.")
 
 
+_GITHUB_RELEASE_DOWNLOAD = re.compile(
+    r"^https://github\.com/(?P<repo>[^/]+/[^/]+)/releases/download/(?P<tag>[^/]+)/(?P<name>[^/]+)$"
+)
+_GITHUB_ASSET_ID_CACHE: dict[str, int] = {}
+
+
+def _github_asset_api_url(url: str, token: str) -> str:
+    """Resolve a browser-style release URL to its API asset URL.
+
+    Private repositories answer 404 on releases/download/<tag>/<name> for
+    OAuth/PAT tokens; only the API asset route (Accept: application/octet-stream)
+    honors token auth. Asset IDs are discovered once per release and cached.
+    """
+    match = _GITHUB_RELEASE_DOWNLOAD.match(url)
+    if match is None:
+        raise RuntimeError(f"Unrecognized GitHub release asset URL shape: {url.split('?')[0]}")
+    repo, tag, name = match.group("repo"), match.group("tag"), match.group("name")
+    cache_key = f"{repo}@{tag}:{name}"
+    if cache_key not in _GITHUB_ASSET_ID_CACHE:
+        listing = requests.get(
+            f"https://api.github.com/repos/{repo}/releases/tags/{tag}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=(10, 60),
+        )
+        listing.raise_for_status()
+        for asset in listing.json().get("assets", []):
+            _GITHUB_ASSET_ID_CACHE[f"{repo}@{tag}:{asset['name']}"] = asset["id"]
+    if cache_key not in _GITHUB_ASSET_ID_CACHE:
+        raise RuntimeError(f"Release asset not found on GitHub: {name}")
+    return f"https://api.github.com/repos/{repo}/releases/assets/{_GITHUB_ASSET_ID_CACHE[cache_key]}"
+
+
 @contextmanager
 def _open_download(url: str) -> Iterator[Any]:
     """Authenticate private hosts; never place tokens in URLs."""
@@ -85,10 +118,15 @@ def _open_download(url: str) -> Iterator[Any]:
             raise RuntimeError("Private Hugging Face downloads require HF_TOKEN in Streamlit secrets.")
         headers = {"Authorization": f"Bearer {token}"}
     elif host.endswith("github.com") or host.endswith("githubusercontent.com"):
-        # Private GitHub Release assets answer 404 anonymously; the redirect
-        # target is pre-signed, so requests stripping the header is correct.
+        # Private release assets 404 anonymously. Browser-style download URLs
+        # also 404 for OAuth/PAT tokens, so resolve to the API asset route,
+        # which honors Bearer auth and 302s to a pre-signed payload URL.
         token = os.environ.get("ASTROCYTE_GITHUB_TOKEN", "").strip()
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        if not token:
+            raise RuntimeError("Private GitHub downloads require ASTROCYTE_GITHUB_TOKEN in Streamlit secrets.")
+        if _GITHUB_RELEASE_DOWNLOAD.match(url):
+            url = _github_asset_api_url(url, token)
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/octet-stream"}
     else:
         with urlopen(url, timeout=60) as response:
             yield response

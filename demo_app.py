@@ -313,7 +313,7 @@ else:
         )
 
 st.header("D · SciencePal preliminary quality analysis")
-st.caption("Only structured, de-identified statistics are sent. Original images and source metadata are not uploaded.")
+st.caption("Only structured, de-identified statistics and the bundled project research PDFs are sent. Original images and source metadata are not uploaded.")
 if result is None:
     st.info("Load or generate a prediction before requesting analysis.")
 else:

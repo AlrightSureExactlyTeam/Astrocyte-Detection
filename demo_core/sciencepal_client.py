@@ -12,7 +12,25 @@ from typing import Any, Callable
 from dotenv import load_dotenv
 
 BASE_URL = "https://sciencepal.ai/api"
+RESEARCH_PDF_DIR = Path(__file__).resolve().parents[1] / "research_pdfs"
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+
+
+def research_attachments() -> list[tuple[str, bytes]]:
+    """Bundled, de-identified research PDFs sent as run attachments.
+
+    The SciencePal knowledge-base retrieval chain is broken platform-side
+    (verified 2026-11-01: no retrieval tool is injected even when a KB is
+    attached in the web UI). Uploading the project documents as run files
+    is the validated alternative: the agent converts them with MinerU and
+    cites document names and page numbers.
+    """
+    if not RESEARCH_PDF_DIR.is_dir():
+        return []
+    return [
+        (path.name, path.read_bytes())
+        for path in sorted(RESEARCH_PDF_DIR.glob("*.pdf"))
+    ]
 
 
 class SciencePalError(RuntimeError):
@@ -211,7 +229,8 @@ class SciencePalClient:
         """Send a single-turn prompt and return only the assistant text."""
         return self.chat(prompt)[0]
 
-    def chat(self, prompt: str, thread_id: str | None = None) -> tuple[str, str | None]:
+    def chat(self, prompt: str, thread_id: str | None = None,
+             attachments: list[tuple[str, bytes]] | None = None) -> tuple[str, str | None]:
         """Send a prompt, continuing the supplied SciencePal thread when available."""
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("Prompt must not be empty")
@@ -221,8 +240,8 @@ class SciencePalClient:
                 client = self._new_sdk_client()
                 if hasattr(client, "__aenter__"):
                     async with client as active:
-                        return await self._stream_request(active, prompt, thread_id)
-                return await self._stream_request(client, prompt, thread_id)
+                        return await self._stream_request(active, prompt, thread_id, attachments)
+                return await self._stream_request(client, prompt, thread_id, attachments)
             except SciencePalError:
                 raise
             except Exception as exc:
@@ -248,6 +267,7 @@ class SciencePalClient:
 
     async def _stream_request(
         self, client: Any, prompt: str, thread_id: str | None = None,
+        attachments: list[tuple[str, bytes]] | None = None,
     ) -> tuple[str, str | None]:
         if thread_id:
             await client.runs.add_message(thread_id=thread_id, content=prompt)
@@ -259,6 +279,8 @@ class SciencePalClient:
             run = await client.runs.start(thread_id, request)
         else:
             kb_options = self._kb_options()
+            if attachments:
+                kb_options["files"] = attachments
             try:
                 run = await client.runs.initiate(agent_id=self.agent_id, prompt=prompt, **kb_options)
             except TypeError as exc:
@@ -287,13 +309,21 @@ class SciencePalClient:
             "result_mode": mode,
             "statistics": statistics,
         })
+        attachments = research_attachments()
+        evidence_note = (
+            "The attached project research PDFs are the evidence base: read them first, and cite "
+            "document names and page numbers for any methodology, metric-definition, or QC-rule claims. "
+            if attachments else
+            "No research documents are attached; explicitly state when evidence is missing. "
+        )
         prompt = (
             "Prepare a concise preliminary quality-control analysis for an astrocyte GFAP segmentation demo. "
-            "Use only these de-identified measurements:\n"
+            + evidence_note
+            + "Use only these de-identified measurements for the current run:\n"
             + json.dumps(safe, indent=2, ensure_ascii=False)
             + "\nSeparate measured facts from interpretation and hypotheses. Do not claim diagnostic validity, "
             "confirmed cell counts, or superiority between models. Manual labels are partial: unlabeled pixels "
             "are not confirmed background, and ImageJ masks are weak foreground labels. Explicitly consider "
             "foreground overprediction and the preliminary in-sample scope. Do not invent missing metrics."
         )
-        return self.ask(prompt)
+        return self.chat(prompt, attachments=attachments or None)[0]

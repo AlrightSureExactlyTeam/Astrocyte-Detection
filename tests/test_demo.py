@@ -137,11 +137,13 @@ class MockRuns:
         self.fail = fail
         self.empty = empty
         self.prompts = []
+        self.initiation_options = []
         self.continued_messages = []
         self.start_count = 0
 
-    async def initiate(self, agent_id, prompt):
+    async def initiate(self, agent_id, prompt, **kwargs):
         self.prompts.append(prompt)
+        self.initiation_options.append(kwargs)
         if self.fail:
             raise self.fail
         return SimpleNamespace(agent_run_id="mock-run", thread_id="mock-thread")
@@ -178,6 +180,8 @@ def test_sciencepal_chat_context_analysis_and_deidentification(monkeypatch):
     assert response == "Mocked final report" and thread_id == "mock-thread"
     assert mock.runs.continued_messages == [("mock-thread", "follow up")]
     assert mock.runs.start_count == 1
+    # Delivery-only correction has dedicated tests; this test covers context and de-identification.
+    monkeypatch.setattr(client, "_is_delivery_status", lambda _text: False)
     assert client.analyze_results(
         {
             "sample_id": "private-id",
@@ -191,6 +195,8 @@ def test_sciencepal_chat_context_analysis_and_deidentification(monkeypatch):
     prompt = mock.runs.prompts[-1]
     assert all(value not in prompt for value in ("private-id", "private-patient", "private-path"))
     assert all(value in prompt for value in ("candidate_cell_count", "v33b2", "cached"))
+    attached_names = [name for name, _content in mock.runs.initiation_options[-1]["files"]]
+    assert attached_names == sorted(attached_names) and len(attached_names) == 5
 
 
 def test_sciencepal_sdk_uses_bounded_timeout_without_paid_retries(monkeypatch):

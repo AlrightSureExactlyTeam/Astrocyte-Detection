@@ -111,7 +111,8 @@ def test_sciencepal_explicit_calls_context_and_no_duplicate_reruns(monkeypatch):
     assert len(app.session_state.sciencepal_messages) == 4
     app.run()
     assert len(FakeSciencePalClient.chat_calls) == 2
-    assert FakeSciencePalClient.instances == 1
+    # One fresh lightweight wrapper per explicit request; passive reruns create none.
+    assert FakeSciencePalClient.instances == 3
 
     app.radio[1].set_value("v33b2").run()
     next(button for button in app.button if button.label == "Load existing result").click().run()

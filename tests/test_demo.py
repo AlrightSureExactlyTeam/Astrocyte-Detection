@@ -50,7 +50,8 @@ def test_dataset_and_model_registries_load():
     assert len(load_dataset_registry()) == 2
     specs = load_model_registry()
     assert {spec.id for spec in specs} == {"cellpose", "unet_v1", "unet_v2", "v33b2"}
-    assert all(spec.live_available for spec in specs)
+    # Source-only checkouts intentionally omit weights; unavailable live modes must explain why.
+    assert all(spec.live_available or spec.unavailable_reason for spec in specs)
 
 
 def test_missing_checkpoint_is_explicit(tmp_path):
